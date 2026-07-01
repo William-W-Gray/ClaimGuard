@@ -77,6 +77,8 @@ services:
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info"]
+    healthcheck:
+      disable: true
 
   beat:
     build:
@@ -87,6 +89,8 @@ services:
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.workers.celery_app.celery_app", "beat", "--loglevel=info"]
+    healthcheck:
+      disable: true
 
   web:
     build:
