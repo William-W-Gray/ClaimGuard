@@ -15,9 +15,15 @@ Both platforms serve HTTPS, so `Secure` cookies work out of the box.
 
 ## 1. Backend on Render
 
+> **Must be a Docker service.** The image pins Python 3.12. A plain Python web service makes
+> Render use Python 3.14 + `pip install`, which fails building `pydantic-core` from source
+> (no wheel for 3.14). Always pick **Docker**.
+
+### 1a. Paid plans — Blueprint (auto-wires everything)
+
 1. **New → Blueprint**, point it at this repo. Render reads [`render.yaml`](./render.yaml)
-   and creates `claimguard-api` (web) + `claimguard-redis`. `JWT_SECRET_KEY` is generated
-   automatically; `REDIS_URL` is wired automatically.
+   and creates `claimguard-api` (Docker web) + `claimguard-redis`. `JWT_SECRET_KEY` is
+   generated automatically; `REDIS_URL` is wired automatically.
 2. In **claimguard-api → Environment**, set the `sync: false` secrets:
    | Var | Value |
    |-----|-------|
@@ -25,10 +31,50 @@ Both platforms serve HTTPS, so `Secure` cookies work out of the box.
    | `FIRST_ADMIN_EMAIL` | your admin login email |
    | `FIRST_ADMIN_PASSWORD` | a strong, unique password (**not** the demo default — the app refuses to boot otherwise) |
    | `CORS_ORIGINS` | leave blank for now; set in step 3 |
-3. Deploy. On first boot the container runs Alembic migrations and seeds **RBAC + your
-   admin only** (no demo data, because `DEMO_MODE=false`). Watch the logs for
-   `seed.done`, then hit `https://<your-api>.onrender.com/api/v1/health/readiness`.
-4. Note the service host, e.g. `claimguard-api.onrender.com`.
+
+### 1b. Free plan — manual Docker service (Blueprints are paid)
+
+1. **New → Web Service** → connect this repo, then set:
+   | Setting | Value |
+   |---------|-------|
+   | Language / Runtime | **Docker** |
+   | Root Directory | `backend` |
+   | Dockerfile Path | `docker/Dockerfile` |
+   | Instance Type | **Free** |
+   | Health Check Path | `/api/v1/health/liveness` |
+   | Start Command | *leave blank* (the image runs migrations + seed + gunicorn) |
+2. Add all environment variables by hand (no Blueprint auto-wiring on Free):
+   ```
+   ENVIRONMENT=production
+   DEBUG=false
+   DEMO_MODE=false
+   LOG_JSON=true
+   COOKIE_SECURE=true
+   COOKIE_SAMESITE=none
+   SEED_ON_STARTUP=true
+   WEB_CONCURRENCY=1
+   JWT_SECRET_KEY=<openssl rand -hex 32>
+   DATABASE_URL=<Neon direct URL with ?ssl=require>
+   FIRST_ADMIN_EMAIL=<your admin email>
+   FIRST_ADMIN_PASSWORD=<strong password — NOT the demo default>
+   ```
+   - **`WEB_CONCURRENCY=1`** — Free has 512 MB RAM; 2 gunicorn workers risk OOM.
+   - **Do not set `PORT`** — Render injects it; the container binds `$PORT`.
+   - **`CORS_ORIGINS`** — add after the frontend deploy (step 3).
+   - **`JWT_SECRET_KEY`** — generate with `openssl rand -hex 32` (or
+     `python3 -c "import secrets; print(secrets.token_hex(32))"`). Keep it secret; don't
+     rotate it later or all live sessions are invalidated.
+3. **Redis (optional on Free).** With `WEB_CONCURRENCY=1` you can skip it — the app falls
+   back to in-memory brute-force lockout + rate-limiting (single worker, so realtime still
+   works); it just logs a harmless `redis.unavailable` warning. For real Redis:
+   **New → Key Value** (free tier) → copy its **Internal** URL → add `REDIS_URL=<that url>`.
+
+### Then (both plans)
+
+Deploy. On first boot the container runs Alembic migrations and seeds **RBAC + your admin
+only** (no demo data, because `DEMO_MODE=false`). Watch the logs for `seed.done`, then hit
+`https://<your-api>.onrender.com/api/v1/health/readiness`. Note the service host, e.g.
+`claimguard-api.onrender.com`.
 
 > After the first successful deploy you may set `SEED_ON_STARTUP=false` (the seed is
 > idempotent, so leaving it on is harmless).
