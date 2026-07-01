@@ -51,6 +51,8 @@ class FraudShieldService:
             shap=shap,
             explanation=narrative,
             latency_ms=max(latency_ms, 1),
+            model_name=self.ml.name,
+            anomaly_probability=round(ml_prob, 4),
         )
 
 

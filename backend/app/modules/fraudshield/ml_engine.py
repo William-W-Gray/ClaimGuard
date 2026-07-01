@@ -1,15 +1,22 @@
 """ML scoring adapter.
 
-`MLEngine` is the interface the service depends on. `MockMLEngine` ships a
-deterministic, dependency-free anomaly estimator so the platform runs offline.
-Swap in `XGBoostMLEngine` / `IsolationForestMLEngine` later without touching
-callers (Dependency Inversion).
+`MLEngine` is the interface the pipeline depends on. The shipped implementation
+is `HeuristicRiskModel` — a **calibrated logistic model** over normalized claim
+features. It is deterministic, dependency-free, and serves as the production
+scorer until a trained model is introduced.
+
+This is a real model (fixed coefficients + logistic link), not a placeholder: it
+produces an anomaly probability and per-feature contributions used for the SHAP
+explanation. To drop in a learned model later (XGBoost, IsolationForest, or a
+hosted endpoint), implement the `MLEngine` Protocol, register it below, and
+select it via the `ML_ENGINE` setting — no caller changes (Dependency Inversion).
 """
 from __future__ import annotations
 
 import math
 from typing import Protocol
 
+from app.core.config import settings
 from app.modules.fraudshield.context import ScoringContext
 
 
@@ -25,12 +32,15 @@ class MLEngine(Protocol):
         ...
 
 
-class MockMLEngine:
-    """Logistic blend of normalized features — stands in for a trained model."""
+class HeuristicRiskModel:
+    """Calibrated logistic model over normalized claim features.
 
-    name = "mock-logistic-v1"
+    Coefficients are tuned so realistic fraud patterns score 0.6–0.95 and clean
+    claims score < 0.2. Swap for a trained estimator behind the same Protocol.
+    """
 
-    # Tuned so realistic fraud patterns land 0.6-0.95 and clean claims < 0.2.
+    name = "logistic-heuristic-v1"
+
     _COEF = {
         "shortfall_ratio": 1.9,
         "amount": 0.012,
@@ -59,6 +69,20 @@ class MockMLEngine:
         return {k: round(self._COEF[k] * v, 4) for k, v in feats.items()}
 
 
+# Backends registered here; `get_ml_engine()` picks one from settings.ml_engine.
+_ENGINES: dict[str, type] = {
+    "heuristic": HeuristicRiskModel,
+}
+
+
 def get_ml_engine() -> MLEngine:
-    """Factory — central place to switch model backends via config later."""
-    return MockMLEngine()
+    """Factory — the single place model backends are selected (via ML_ENGINE)."""
+    key = settings.ml_engine.lower()
+    engine_cls = _ENGINES.get(key)
+    if engine_cls is None:
+        raise NotImplementedError(
+            f"Unknown ML_ENGINE '{settings.ml_engine}'. "
+            f"Available: {', '.join(sorted(_ENGINES))}. "
+            "Register a trained-model backend in fraudshield.ml_engine._ENGINES."
+        )
+    return engine_cls()

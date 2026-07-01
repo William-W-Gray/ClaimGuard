@@ -52,3 +52,5 @@ class ScoringResult:
     shap: list[ShapValue]
     explanation: str
     latency_ms: int
+    model_name: str = "unknown"
+    anomaly_probability: float = 0.0

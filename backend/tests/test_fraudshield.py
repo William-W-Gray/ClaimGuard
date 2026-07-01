@@ -1,8 +1,11 @@
 """Unit tests for the FraudShield scoring pipeline (no DB)."""
 from __future__ import annotations
 
+import pytest
+
 from app.modules.fraudshield import ScoringContext
 from app.modules.fraudshield.decision_engine import DecisionEngine
+from app.modules.fraudshield.ml_engine import HeuristicRiskModel, get_ml_engine
 from app.modules.fraudshield.service import FraudShieldService
 from app.modules.trustscore.service import TrustInputs, trustscore_service
 
@@ -85,6 +88,33 @@ def test_decision_thresholds():
     assert d.decision(40) == "PEND_VERIFY"
     assert d.decision(85) == "PEND_INVESTIGATE"
     assert d.risk_level(90) == "CRITICAL"
+
+
+def test_result_carries_model_identity():
+    ctx = ScoringContext(
+        claim_ref="MODEL",
+        claimed_amount=45.0,
+        member_shortfall=25.0,
+        expected_shortfall_min=8,
+        expected_shortfall_max=12,
+        provider_trust_score=73,
+        provider_flags_90d=7,
+    )
+    result = service.score(ctx)
+    assert result.model_name == "logistic-heuristic-v1"
+    assert 0.0 <= result.anomaly_probability <= 1.0
+
+
+def test_ml_engine_factory_selects_heuristic():
+    assert isinstance(get_ml_engine(), HeuristicRiskModel)
+
+
+def test_ml_engine_factory_rejects_unknown(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ml_engine", "xgboost-not-wired")
+    with pytest.raises(NotImplementedError):
+        get_ml_engine()
 
 
 def test_trustscore_badges():

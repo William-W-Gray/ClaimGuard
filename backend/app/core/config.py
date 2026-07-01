@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
+    # ── FraudShield ──────────────────────────────────────────────────────────
+    # Selects the ML backend in fraudshield.ml_engine (currently: "heuristic").
+    ml_engine: str = "heuristic"
+
     # ── Demo / seed ────────────────────────────────────────────────────────
     demo_mode: bool = True
     seed_on_startup: bool = False

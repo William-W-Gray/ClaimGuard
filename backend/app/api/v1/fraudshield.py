@@ -50,6 +50,8 @@ async def score(payload: ScoreRequest) -> dict:
             "decision": result.decision,
             "priority": result.priority,
             "latencyMs": result.latency_ms,
+            "modelName": result.model_name,
+            "anomalyProbability": result.anomaly_probability,
             "flags": [
                 {"code": f.code, "severity": f.severity, "detail": f.detail}
                 for f in result.flags
