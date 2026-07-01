@@ -3,6 +3,10 @@
 # Then open:     http://localhost:8080   (web UI, proxies /api + /ws to the backend)
 # API docs:      http://localhost:8000/docs
 #
+# Database: uses managed Postgres via DATABASE_URL in .env (e.g. Neon). If that is
+# blank, it falls back to a local Postgres container — start it with:
+#   docker compose --profile local-db up --build
+#
 # Demo login:    admin@claimguard.co.zw / ChangeMe!2026  (pre-filled on the login page)
 
 name: claimguard
@@ -11,16 +15,18 @@ x-backend-env: &backend-env
   ENVIRONMENT: production
   DEBUG: "false"
   LOG_JSON: "true"
-  DATABASE_URL: postgresql+asyncpg://claimguard:claimguard@db:5432/claimguard
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://claimguard:claimguard@db:5432/claimguard}
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/1
   CELERY_RESULT_BACKEND: redis://redis:6379/2
-  JWT_SECRET_KEY: change-me-compose-secret-not-for-real-prod
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-compose-secret-not-for-real-prod}
   CORS_ORIGINS: http://localhost:8080
 
 services:
+  # Local Postgres — only started with the `local-db` profile (managed DB is default).
   db:
     image: postgres:16-alpine
+    profiles: ["local-db"]
     environment:
       POSTGRES_USER: claimguard
       POSTGRES_PASSWORD: claimguard
@@ -53,9 +59,8 @@ services:
       SEED_ON_STARTUP: "true"   # migrate + seed demo data on first boot
     ports:
       - "8000:8000"
+    restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     command: ["./scripts/entrypoint.sh"]
@@ -71,9 +76,8 @@ services:
       context: ./backend
       dockerfile: docker/Dockerfile
     environment: *backend-env
+    restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info"]
@@ -85,6 +89,7 @@ services:
       context: ./backend
       dockerfile: docker/Dockerfile
     environment: *backend-env
+    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy

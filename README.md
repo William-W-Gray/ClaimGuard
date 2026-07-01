@@ -23,6 +23,7 @@ investigators a full case-management workflow.
 Requires Docker + Docker Compose.
 
 ```bash
+cp .env.example .env        # set DATABASE_URL to your managed Postgres (see below)
 docker compose up --build
 ```
 
@@ -46,15 +47,34 @@ notifications) on first boot. The web container serves the built SPA and
 reverse-proxies `/api` **and the WebSocket** to the backend, so everything is
 same-origin — no CORS to configure.
 
-To stop / reset:
+To stop:
 
 ```bash
-docker compose down            # stop
-docker compose down -v         # stop and wipe the database volume
+docker compose down            # stop (managed DB data is untouched)
 ```
 
-Seed a fresh demo team includes: `admin` (super user) plus an analyst and two
+The seeded demo team includes: `admin` (super user) plus an analyst and two
 agents (all use the same demo password) so you can exercise **case assignment**.
+
+### Database options
+
+The stack uses **managed Postgres by default** — set `DATABASE_URL` in `.env`
+(use the provider's **direct**, non-pooled endpoint with the asyncpg driver + SSL):
+
+```
+# Neon example
+DATABASE_URL=postgresql+asyncpg://USER:PASSWORD@ep-xxxx.REGION.aws.neon.tech/DBNAME?ssl=require
+```
+
+Prefer to run everything locally instead? Leave `DATABASE_URL` blank and start the
+bundled Postgres container via its profile:
+
+```bash
+docker compose --profile local-db up --build   # local Postgres in a container
+docker compose --profile local-db down -v      # stop + wipe the local DB volume
+```
+
+Either way, the API container runs Alembic migrations and seeds demo data on boot.
 
 ---
 
