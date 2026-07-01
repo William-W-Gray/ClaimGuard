@@ -69,7 +69,32 @@ Both platforms serve HTTPS, so `Secure` cookies work out of the box.
    works); it just logs a harmless `redis.unavailable` warning. For real Redis:
    **New → Key Value** (free tier) → copy its **Internal** URL → add `REDIS_URL=<that url>`.
 
-### Then (both plans)
+> **Render can't convert a service's runtime after creation.** If an existing service is
+> building as Python (log shows `Using Python version …` / `pip install`), delete it and
+> create a new one with **Language = Docker** — editing won't switch it.
+
+### 1c. Free plan — native Python (no Docker)
+
+If the Docker option is giving you trouble, deploy on Render's **native Python** builder
+instead. The repo pins Python **3.12** via [`backend/.python-version`](./backend/.python-version)
+(Render's 3.14 default has no `pydantic-core` wheel and fails compiling Rust on the
+read-only build FS; 3.12 installs everything from prebuilt wheels).
+
+1. **New → Web Service** → connect this repo:
+   | Setting | Value |
+   |---------|-------|
+   | Language | **Python 3** |
+   | Root Directory | `backend` |
+   | Build Command | `pip install -r requirements.txt` |
+   | Start Command | `bash scripts/entrypoint.sh` |
+   | Instance Type | **Free** |
+   | Health Check Path | `/api/v1/health/liveness` |
+2. Add the **same environment variables** as §1b (step 2) — including `WEB_CONCURRENCY=1`,
+   `JWT_SECRET_KEY`, `DATABASE_URL`, `FIRST_ADMIN_*`. Redis is optional (§1b step 3).
+
+The start command runs the same migrations + seed + gunicorn as the Docker image.
+
+### Then (all options)
 
 Deploy. On first boot the container runs Alembic migrations and seeds **RBAC + your admin
 only** (no demo data, because `DEMO_MODE=false`). Watch the logs for `seed.done`, then hit
