@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -15,8 +16,14 @@ from typing import Any
 from fastapi import WebSocket
 
 from app.core.logging import get_logger
+from app.core.redis import redis_client
 
 log = get_logger(__name__)
+
+# Pub/sub channel used to fan events across web-worker processes. Each worker only
+# holds its own sockets in memory, so a broadcast is published here and every
+# worker's subscriber re-delivers it to its local connections.
+_WS_CHANNEL = "cg:ws:events"
 
 
 class WSEventType(StrEnum):
@@ -45,6 +52,7 @@ class ConnectionManager:
     def __init__(self) -> None:
         self._connections: dict[str, WebSocket] = {}
         self._lock = asyncio.Lock()
+        self._subscriber: asyncio.Task | None = None
 
     async def connect(self, websocket: WebSocket) -> str:
         await websocket.accept()
@@ -72,8 +80,24 @@ class ConnectionManager:
             await websocket.send_json(message)
 
     async def broadcast(self, event_type: WSEventType | str, payload: dict[str, Any]) -> None:
-        """Publish an event to every connected client. Drops dead sockets."""
+        """Publish an event to every connected client across all workers.
+
+        With Redis available the message is published to a shared channel and each
+        worker's subscriber delivers it locally (so a broadcast reaches clients on
+        every process). Without Redis (offline/fallback) it fans out in-process.
+        """
         message = build_event(event_type, payload)
+        if redis_client.using_fallback:
+            await self._local_fanout(message)
+            return
+        try:
+            await redis_client.client.publish(_WS_CHANNEL, json.dumps(message))
+        except Exception:
+            # Redis hiccup — at least reach this worker's own clients.
+            await self._local_fanout(message)
+
+    async def _local_fanout(self, message: dict[str, Any]) -> None:
+        """Deliver an already-built event to this process's connections."""
         dead: list[str] = []
         async with self._lock:
             targets = list(self._connections.items())
@@ -84,6 +108,34 @@ class ConnectionManager:
                 dead.append(conn_id)
         for conn_id in dead:
             await self.disconnect(conn_id)
+
+    async def start_subscriber(self) -> None:
+        """Begin consuming the cross-worker event channel (no-op in fallback)."""
+        if redis_client.using_fallback or self._subscriber is not None:
+            return
+        self._subscriber = asyncio.create_task(self._run_subscriber())
+
+    async def stop_subscriber(self) -> None:
+        if self._subscriber is not None:
+            self._subscriber.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._subscriber
+            self._subscriber = None
+
+    async def _run_subscriber(self) -> None:
+        pubsub = redis_client.client.pubsub()
+        await pubsub.subscribe(_WS_CHANNEL)
+        log.info("ws.subscriber.started", channel=_WS_CHANNEL)
+        try:
+            async for msg in pubsub.listen():
+                if msg.get("type") != "message":
+                    continue
+                with contextlib.suppress(Exception):
+                    await self._local_fanout(json.loads(msg["data"]))
+        finally:
+            with contextlib.suppress(Exception):
+                await pubsub.unsubscribe(_WS_CHANNEL)
+                await pubsub.aclose()
 
     async def heartbeat(self, websocket: WebSocket, interval: int = 25) -> None:
         """Periodic ping to keep the connection alive through proxies."""

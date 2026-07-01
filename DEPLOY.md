@@ -85,6 +85,9 @@ WebSocket calls.
 - **No Celery workers** (per the chosen plan): scheduled/background tasks (e.g. periodic
   rescoring) don't run. The API, realtime WebSocket, brute-force lockout, and rate limiting
   all work (Redis-backed).
+- **Web concurrency**: the API runs under gunicorn with `WEB_CONCURRENCY` uvicorn workers
+  (default 2). Realtime events fan out across workers via a Redis pub/sub backplane, so
+  scaling workers/instances is safe. Raise `WEB_CONCURRENCY` for a bigger plan.
 - **Render free web** spins down on idle (cold starts). Use the `starter` plan (default in
   the blueprint) to stay warm.
 - **Secrets** live in Render/Vercel env settings — never commit them. `JWT_SECRET_KEY` is

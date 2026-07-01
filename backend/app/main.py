@@ -12,6 +12,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import register_middleware
 from app.core.redis import redis_client
+from app.core.websocket import manager
 
 log = get_logger(__name__)
 
@@ -20,6 +21,8 @@ log = get_logger(__name__)
 async def lifespan(_: FastAPI):
     configure_logging()
     await redis_client.connect()
+    # Per-worker subscriber for cross-process realtime fan-out (safe to run many).
+    await manager.start_subscriber()
     log.info(
         "app.startup",
         app=settings.app_name,
@@ -27,6 +30,7 @@ async def lifespan(_: FastAPI):
         version=settings.version,
     )
     yield
+    await manager.stop_subscriber()
     await redis_client.close()
     log.info("app.shutdown")
 

@@ -23,6 +23,8 @@ services:
         value: "false"
       - key: LOG_JSON
         value: "true"
+      - key: WEB_CONCURRENCY          # gunicorn worker count (realtime is Redis-backed)
+        value: "2"
       # Cross-site cookie (Vercel ↔ Render are different sites) — MUST be None+Secure.
       - key: COOKIE_SECURE
         value: "true"
