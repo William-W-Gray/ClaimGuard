@@ -13,6 +13,10 @@ _INSECURE_SECRETS = {
     "",
 }
 
+# The seed/demo admin password. A real production deploy (demo_mode off) must
+# never boot with this still in place — it's public knowledge.
+_DEMO_ADMIN_PASSWORD = "ChangeMe!2026"
+
 Environment = Literal["development", "staging", "production", "test"]
 
 
@@ -91,7 +95,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_production_security(self) -> Settings:
-        """Fail fast on insecure configuration in production."""
+        """Fail fast on insecure configuration in production.
+
+        Baseline checks apply to every production boot. The strictest checks
+        (secure cookies, non-default admin password) apply only when demo_mode
+        is off — i.e. a *real* deployment, not the packaged demo which
+        intentionally runs `ENVIRONMENT=production` over plain http.
+        """
         if self.is_production:
             problems = []
             if self.jwt_secret_key in _INSECURE_SECRETS:
@@ -103,6 +113,17 @@ class Settings(BaseSettings):
                 problems.append("DEBUG must be false in production")
             if any(o == "*" for o in self.cors_origins):
                 problems.append("CORS_ORIGINS must not be '*' in production")
+
+            if not self.demo_mode:
+                if not self.cookie_secure:
+                    problems.append(
+                        "COOKIE_SECURE must be true in production (serve over HTTPS)"
+                    )
+                if self.first_admin_password == _DEMO_ADMIN_PASSWORD:
+                    problems.append(
+                        "FIRST_ADMIN_PASSWORD must be changed from the demo default"
+                    )
+
             if problems:
                 raise ValueError(
                     "Insecure production configuration:\n  - " + "\n  - ".join(problems)

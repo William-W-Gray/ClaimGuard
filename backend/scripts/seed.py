@@ -285,21 +285,25 @@ async def seed_notifications(session) -> None:
 
 async def main(create_tables: bool = False) -> None:
     configure_logging()
-    log.info("seed.start", db=settings.database_url.split("@")[-1])
+    log.info("seed.start", db=settings.database_url.split("@")[-1], demo=settings.demo_mode)
     if create_tables:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     async with SessionFactory() as session:
+        # Always provision RBAC + the first admin (from FIRST_ADMIN_* settings).
         await seed_rbac(session)
         await seed_admin(session)
-        await seed_team(session)
-        await seed_members(session)
-        await seed_providers(session)
-        await seed_claims(session)
-        await seed_notifications(session)
+        # Demo fixtures (team, members, providers, claims, notifications) are only
+        # loaded in demo mode — a real production DB stays clean of fake data.
+        if settings.demo_mode:
+            await seed_team(session)
+            await seed_members(session)
+            await seed_providers(session)
+            await seed_claims(session)
+            await seed_notifications(session)
         await session.commit()
     await engine.dispose()
-    log.info("seed.done")
+    log.info("seed.done", demo=settings.demo_mode)
 
 
 if __name__ == "__main__":

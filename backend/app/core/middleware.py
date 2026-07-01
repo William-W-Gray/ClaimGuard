@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from app.core.config import settings
+from app.core.dependencies import client_ip
 from app.core.logging import get_logger
 from app.core.redis import redis_client
 from app.core.responses import failure
@@ -84,7 +85,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith(f"{settings.api_v1_prefix}/health"):
             return await call_next(request)
 
-        client = request.client.host if request.client else "anonymous"
+        client = client_ip(request)
         window = int(time.time() // 60)
         key = f"ratelimit:{client}:{window}"
         try:

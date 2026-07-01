@@ -1,0 +1,60 @@
+# ClaimGuard 360° — Render blueprint (backend API + Redis).
+# Frontend is deployed separately on Vercel (see frontend/vercel.json + DEPLOY.md).
+#
+# Deploy: Render Dashboard → New → Blueprint → point at this repo.
+# Then set the `sync: false` secrets below in the service's Environment tab.
+services:
+  # ── FastAPI backend (Docker) ───────────────────────────────────────────────
+  - type: web
+    name: claimguard-api
+    runtime: docker
+    dockerfilePath: ./backend/docker/Dockerfile
+    dockerContext: ./backend
+    plan: starter                     # free spins down on idle; starter stays warm
+    region: oregon
+    healthCheckPath: /api/v1/health/liveness
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DEMO_MODE               # real production: strict guards, no demo data
+        value: "false"
+      - key: LOG_JSON
+        value: "true"
+      # Cross-site cookie (Vercel ↔ Render are different sites) — MUST be None+Secure.
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: none
+      # First boot creates RBAC + the admin (from FIRST_ADMIN_*). Idempotent; you
+      # may set this to "false" after the first successful deploy.
+      - key: SEED_ON_STARTUP
+        value: "true"
+      # Render generates a strong secret and keeps it stable across deploys.
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      # ── Set these in the Render dashboard (sync:false = not stored in git) ──
+      - key: DATABASE_URL            # Neon: postgresql+asyncpg://…?ssl=require (direct endpoint)
+        sync: false
+      - key: CORS_ORIGINS            # https://<your-app>.vercel.app  (exact, comma-separated)
+        sync: false
+      - key: FIRST_ADMIN_EMAIL
+        sync: false
+      - key: FIRST_ADMIN_PASSWORD    # strong, unique — NOT the demo default
+        sync: false
+      # Redis wired automatically from the service below.
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: claimguard-redis
+          property: connectionString
+
+  # ── Redis / Key Value (brute-force lockout + rate limiting) ─────────────────
+  - type: redis
+    name: claimguard-redis
+    plan: free                        # 25MB is plenty for counters
+    region: oregon
+    ipAllowList: []                   # internal-only (reachable from the API service)
+    maxmemoryPolicy: allkeys-lru

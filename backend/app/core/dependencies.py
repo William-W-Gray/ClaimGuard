@@ -99,4 +99,19 @@ PaginationDep = Annotated[Pagination, Depends(pagination_params)]
 
 
 def client_ip(request: Request) -> str:
+    """Best-effort real client IP.
+
+    Behind nginx the socket peer (`request.client.host`) is always the proxy, so
+    rate-limiting and brute-force lockout would collapse to a single bucket and
+    audit logs would record the proxy. nginx sets `X-Real-IP` to the true remote
+    address and appends to `X-Forwarded-For`; trust those (the proxy is the only
+    ingress). Falls back to the socket peer when there is no proxy.
+    """
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        # Left-most entry is the original client.
+        return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"

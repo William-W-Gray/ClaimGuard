@@ -7,6 +7,7 @@ token-authenticated) WebSocket are mounted without the global auth dependency.
 from fastapi import APIRouter, Depends
 
 from app.api.v1 import (
+    audit,
     auth,
     claims,
     dashboard,
@@ -21,6 +22,7 @@ from app.api.v1 import (
     users,
     websocket,
 )
+from app.core.config import settings
 from app.core.dependencies import get_current_user
 
 api_router = APIRouter()
@@ -41,4 +43,9 @@ api_router.include_router(fraudshield.router, dependencies=protected)
 api_router.include_router(investigations.router, dependencies=protected)
 api_router.include_router(users.router, dependencies=protected)
 api_router.include_router(notifications.router, dependencies=protected)
-api_router.include_router(demo.router, dependencies=protected)
+api_router.include_router(audit.router, dependencies=protected)
+
+# ── Demo-only (scripted scenarios / mock broadcasts) ─────────────────────────────
+# Never expose the demo scenario runner in a real deployment.
+if settings.demo_mode:
+    api_router.include_router(demo.router, dependencies=protected)

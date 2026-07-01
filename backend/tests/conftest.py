@@ -9,7 +9,8 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6399/0")  # forces fallback
 os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "100000")
 
-import pytest  # noqa: E402
+import contextlib  # noqa: E402
+
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
@@ -37,10 +38,8 @@ async def _prepare_database():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
-    try:
+    with contextlib.suppress(OSError):
         os.remove("./test_claimguard.db")
-    except OSError:
-        pass
 
 
 @pytest_asyncio.fixture
@@ -50,12 +49,22 @@ async def client():
         yield ac
 
 
-@pytest_asyncio.fixture
-async def auth_headers(client: AsyncClient) -> dict[str, str]:
+async def _login(client: AsyncClient, email: str, password: str = "ChangeMe!2026") -> str:
     resp = await client.post(
-        "/api/v1/auth/login",
-        json={"email": "admin@claimguard.co.zw", "password": "ChangeMe!2026"},
+        "/api/v1/auth/login", json={"email": email, "password": password}
     )
     assert resp.status_code == 200, resp.text
-    token = resp.json()["data"]["accessToken"]
+    return resp.json()["data"]["accessToken"]
+
+
+@pytest_asyncio.fixture
+async def auth_headers(client: AsyncClient) -> dict[str, str]:
+    token = await _login(client, "admin@claimguard.co.zw")
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def agent_headers(client: AsyncClient) -> dict[str, str]:
+    """A seeded non-admin (agent) — for RBAC negative tests."""
+    token = await _login(client, "farai.nyathi@claimguard.co.zw")
     return {"Authorization": f"Bearer {token}"}

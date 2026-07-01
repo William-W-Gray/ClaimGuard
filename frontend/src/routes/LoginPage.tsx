@@ -2,13 +2,16 @@ import { useState, type FormEvent } from 'react';
 import { ShieldCheck, Lock, Mail, Loader2, Eye, EyeOff } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 
+// Demo credentials are pre-filled ONLY in demo builds (VITE_DEMO_MODE=true).
+// A real production build ships an empty form — no public credentials on screen.
+const IS_DEMO = import.meta.env.VITE_DEMO_MODE === 'true';
 const DEMO_EMAIL = 'admin@claimguard.co.zw';
 const DEMO_PASSWORD = 'ChangeMe!2026';
 
 export function LoginPage() {
   const { login, loggingIn, error, clearError } = useAuthStore();
-  const [email, setEmail] = useState(DEMO_EMAIL);
-  const [password, setPassword] = useState(DEMO_PASSWORD);
+  const [email, setEmail] = useState(IS_DEMO ? DEMO_EMAIL : '');
+  const [password, setPassword] = useState(IS_DEMO ? DEMO_PASSWORD : '');
   const [showPassword, setShowPassword] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
@@ -125,7 +128,9 @@ export function LoginPage() {
 
           <div className="text-center pt-1">
             <p className="text-[11px] text-gray-400">
-              Demo credentials are pre-filled. Powered by ClaimGuard FraudShield.
+              {IS_DEMO
+                ? 'Demo credentials are pre-filled. Powered by ClaimGuard FraudShield.'
+                : 'Powered by ClaimGuard FraudShield.'}
             </p>
           </div>
         </form>

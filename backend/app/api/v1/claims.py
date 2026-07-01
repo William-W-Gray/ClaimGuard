@@ -44,8 +44,14 @@ async def live_feed(db: DbSession, limit: int = Query(5, ge=1, le=50)) -> dict:
 
 
 @router.get("/{claim_ref}", summary="Full claim detail", response_model=None)
-async def get_claim(claim_ref: str, db: DbSession) -> dict:
-    return success(await ClaimService(db).get_detail(claim_ref), "Claim detail")
+async def get_claim(
+    claim_ref: str, db: DbSession, user: CurrentUserDep, request: Request
+) -> dict:
+    data = await ClaimService(db).get_detail(claim_ref)
+    await AuditService(db).record_view(
+        entity_type="claim", entity_id=claim_ref, actor_id=user.id, request=request
+    )
+    return success(data, "Claim detail")
 
 
 @router.post("/{claim_ref}/approve", summary="Approve a claim")
