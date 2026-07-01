@@ -2,51 +2,38 @@
 // Unwraps the standard {success, message, data, metadata, errors} envelope,
 // attaches the auth token, transparently refreshes an expired access token,
 // and surfaces clean errors.
+//
+// SECURITY: PHI system. The short-lived access token lives in memory ONLY —
+// never localStorage/sessionStorage — so it cannot be exfiltrated via XSS or
+// read from disk. The long-lived refresh token is held by the browser in an
+// httpOnly + Secure + SameSite cookie set by the backend; JavaScript can never
+// read it, and it is sent automatically via `credentials: 'include'`.
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api/v1';
 
-const ACCESS_KEY = 'cg_access_token';
-const REFRESH_KEY = 'cg_refresh_token';
+// ── Token storage (in-memory access token only) ───────────────────────────────
+let accessToken: string | null = null;
 
-// ── Token storage ────────────────────────────────────────────────────────────
 export function getToken(): string | null {
-  try {
-    return localStorage.getItem(ACCESS_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function getRefreshToken(): string | null {
-  try {
-    return localStorage.getItem(REFRESH_KEY);
-  } catch {
-    return null;
-  }
+  return accessToken;
 }
 
 export function setToken(token: string | null): void {
-  try {
-    if (token) localStorage.setItem(ACCESS_KEY, token);
-    else localStorage.removeItem(ACCESS_KEY);
-  } catch {
-    /* ignore storage errors (private mode, etc.) */
-  }
+  accessToken = token;
 }
 
-export function setTokens(access: string | null, refresh: string | null): void {
-  setToken(access);
-  try {
-    if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
-    else localStorage.removeItem(REFRESH_KEY);
-  } catch {
-    /* ignore */
-  }
+/**
+ * Store the access token. The refresh token argument is ignored on purpose —
+ * refresh is handled entirely by the backend's httpOnly cookie. The second
+ * parameter is kept for call-site compatibility.
+ */
+export function setTokens(access: string | null, _refresh?: string | null): void {
+  accessToken = access;
 }
 
 export function clearTokens(): void {
-  setTokens(null, null);
+  accessToken = null;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -93,27 +80,25 @@ function buildUrl(path: string, params?: RequestOptions['params']): string {
 }
 
 // ── Token refresh (deduped) ─────────────────────────────────────────────────────
+// The refresh token travels in the httpOnly cookie, so we send no body and rely
+// on `credentials: 'include'`. A fresh access token comes back in the response.
 let refreshInFlight: Promise<boolean> | null = null;
 
-async function refreshAccessToken(): Promise<boolean> {
-  const refresh = getRefreshToken();
-  if (!refresh) return false;
+export async function refreshAccessToken(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = (async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ refreshToken: refresh }),
+        body: '{}',
       });
       if (!res.ok) throw new Error('refresh failed');
-      const payload = (await res.json()) as Envelope<{
-        accessToken: string;
-        refreshToken: string;
-      }>;
+      const payload = (await res.json()) as Envelope<{ accessToken: string }>;
       if (!payload.success) throw new Error(payload.message);
-      setTokens(payload.data.accessToken, payload.data.refreshToken);
+      setToken(payload.data.accessToken);
       return true;
     } catch {
       clearTokens();
@@ -145,13 +130,16 @@ async function performFetch(path: string, options: RequestOptions): Promise<Resp
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal,
+      // Send the httpOnly refresh cookie with every request (same-origin).
+      credentials: 'include',
     });
   } catch {
     throw new ApiError(0, 'Network error — is the ClaimGuard API running?', 'network');
   }
 
-  // Transparently refresh an expired access token and retry once.
-  if (response.status === 401 && !isAuthPath && !_retried && getRefreshToken()) {
+  // Transparently refresh an expired access token and retry once. The refresh
+  // cookie decides whether a session exists — we always attempt it.
+  if (response.status === 401 && !isAuthPath && !_retried) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return performFetch(path, { ...options, _retried: true });

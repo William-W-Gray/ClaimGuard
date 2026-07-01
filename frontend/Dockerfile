@@ -10,6 +10,9 @@ RUN npm run build
 FROM nginx:alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Kept outside conf.d/ so nginx's `include conf.d/*.conf` doesn't load it as a
+# standalone config; it's pulled into each location via an explicit include.
+COPY security-headers.conf /etc/nginx/security-headers.conf
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

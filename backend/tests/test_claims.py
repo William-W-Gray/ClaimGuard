@@ -4,8 +4,8 @@ from __future__ import annotations
 from httpx import AsyncClient
 
 
-async def test_queue_is_paginated(client: AsyncClient):
-    resp = await client.get("/api/v1/claims?page=1&page_size=2")
+async def test_queue_is_paginated(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/claims?page=1&page_size=2", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["data"]) <= 2
@@ -14,15 +14,19 @@ async def test_queue_is_paginated(client: AsyncClient):
     assert pagination["pageSize"] == 2
 
 
-async def test_queue_search_filter(client: AsyncClient):
-    resp = await client.get("/api/v1/claims?search=Tendai")
+async def test_queue_requires_auth(client: AsyncClient):
+    assert (await client.get("/api/v1/claims")).status_code == 401
+
+
+async def test_queue_search_filter(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/claims?search=Tendai", headers=auth_headers)
     assert resp.status_code == 200
     refs = [c["claimRef"] for c in resp.json()["data"]]
     assert "CG-00291" in refs
 
 
-async def test_claim_detail(client: AsyncClient):
-    resp = await client.get("/api/v1/claims/CG-00291")
+async def test_claim_detail(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/claims/CG-00291", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["claimRef"] == "CG-00291"
@@ -32,8 +36,8 @@ async def test_claim_detail(client: AsyncClient):
     assert isinstance(data["expectedShortfall"], list)
 
 
-async def test_claim_not_found(client: AsyncClient):
-    resp = await client.get("/api/v1/claims/CG-DOES-NOT-EXIST")
+async def test_claim_not_found(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/claims/CG-DOES-NOT-EXIST", headers=auth_headers)
     assert resp.status_code == 404
     assert resp.json()["success"] is False
 
@@ -59,9 +63,10 @@ async def test_reject_claim(client: AsyncClient, auth_headers: dict):
     assert resp.json()["data"]["decision"] == "REJECT_FRAUD"
 
 
-async def test_fraudshield_score_endpoint(client: AsyncClient):
+async def test_fraudshield_score_endpoint(client: AsyncClient, auth_headers: dict):
     resp = await client.post(
         "/api/v1/fraudshield/score",
+        headers=auth_headers,
         json={
             "claimRef": "TEST-1",
             "claimedAmount": 88,
@@ -81,20 +86,26 @@ async def test_fraudshield_score_endpoint(client: AsyncClient):
     assert data["aiExplanation"]
 
 
-async def test_dashboard_metrics(client: AsyncClient):
-    resp = await client.get("/api/v1/dashboard/metrics")
+async def test_dashboard_metrics(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/dashboard/metrics", headers=auth_headers)
     assert resp.status_code == 200
     assert "claimsToday" in resp.json()["data"]
 
 
-async def test_providers_paginated(client: AsyncClient):
-    resp = await client.get("/api/v1/providers?page=1&page_size=3")
+async def test_dashboard_requires_auth(client: AsyncClient):
+    assert (await client.get("/api/v1/dashboard/metrics")).status_code == 401
+    assert (await client.get("/api/v1/providers")).status_code == 401
+    assert (await client.get("/api/v1/members")).status_code == 401
+
+
+async def test_providers_paginated(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/providers?page=1&page_size=3", headers=auth_headers)
     assert resp.status_code == 200
     assert len(resp.json()["data"]) <= 3
 
 
-async def test_trustscore_summary(client: AsyncClient):
-    resp = await client.get("/api/v1/trustscore/summary")
+async def test_trustscore_summary(client: AsyncClient, auth_headers: dict):
+    resp = await client.get("/api/v1/trustscore/summary", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["data"]["total"] == 6
 

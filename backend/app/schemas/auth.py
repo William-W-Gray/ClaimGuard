@@ -14,7 +14,8 @@ class LoginRequest(CamelModel):
 
 
 class RefreshRequest(CamelModel):
-    refresh_token: str
+    # Optional: the refresh token normally arrives via the httpOnly cookie.
+    refresh_token: str | None = None
 
 
 class TokenPair(CamelModel):

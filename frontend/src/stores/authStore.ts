@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import {
   clearTokens,
-  getRefreshToken,
-  getToken,
-  setTokens,
+  refreshAccessToken,
+  setToken,
 } from '@/lib/apiClient';
 import {
   fetchMe,
@@ -44,7 +43,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       listenerBound = true;
     }
 
-    if (!getToken()) {
+    // No access token survives a reload (memory-only). Ask the backend to mint
+    // a fresh one from the httpOnly refresh cookie; if that fails there is no
+    // valid session.
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) {
       set({ status: 'unauthenticated', user: null });
       return;
     }
@@ -61,7 +64,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loggingIn: true, error: null });
     try {
       const tokens = await loginRequest(email, password);
-      setTokens(tokens.accessToken, tokens.refreshToken);
+      // Access token → memory; refresh token is set by the backend as an
+      // httpOnly cookie and never touched by JS.
+      setToken(tokens.accessToken);
       const user = await fetchMe();
       set({ status: 'authenticated', user, loggingIn: false });
       return true;
@@ -75,13 +80,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    const refresh = getRefreshToken();
-    if (refresh) {
-      try {
-        await logoutRequest(refresh);
-      } catch {
-        /* best effort — clear locally regardless */
-      }
+    // Server revokes the refresh token and clears the cookie (identified via the
+    // httpOnly cookie itself — no token needs to be sent from JS).
+    try {
+      await logoutRequest();
+    } catch {
+      /* best effort — clear locally regardless */
     }
     clearTokens();
     set({ status: 'unauthenticated', user: null, error: null });

@@ -2,15 +2,21 @@
 // events to subscribers. Emitter API mirrors the former mock emitter
 // (connect/disconnect/on/off) so existing listeners work unchanged.
 import type { WSEvent, WSEventType } from '@/types';
+import { getToken, refreshAccessToken } from '@/lib/apiClient';
 
 type EventHandler = (event: WSEvent) => void;
 type StatusHandler = (connected: boolean) => void;
 
-function resolveWsUrl(): string {
-  const explicit = import.meta.env.VITE_WS_URL as string | undefined;
-  if (explicit) return explicit;
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}/api/v1/ws`;
+function resolveWsUrl(token: string): string {
+  const base = (() => {
+    const explicit = import.meta.env.VITE_WS_URL as string | undefined;
+    if (explicit) return explicit;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}/api/v1/ws`;
+  })();
+  // The gateway carries PHI events — authenticate with the access token.
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}token=${encodeURIComponent(token)}`;
 }
 
 class RealtimeClient {
@@ -31,13 +37,25 @@ class RealtimeClient {
       return;
     }
     this.shouldReconnect = true;
-    this.open();
+    void this.open();
   }
 
-  private open(): void {
+  private async open(): Promise<void> {
+    // The socket cannot send Authorization headers, so mint/refresh an access
+    // token and pass it as a query param. Without one there is no session.
+    let token = getToken();
+    if (!token) {
+      const ok = await refreshAccessToken();
+      token = ok ? getToken() : null;
+    }
+    if (!token) {
+      this.scheduleReconnect();
+      return;
+    }
+
     let socket: WebSocket;
     try {
-      socket = new WebSocket(resolveWsUrl());
+      socket = new WebSocket(resolveWsUrl(token));
     } catch {
       this.scheduleReconnect();
       return;
@@ -85,7 +103,7 @@ class RealtimeClient {
     if (!this.shouldReconnect || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.open();
+      void this.open();
     }, 3000);
   }
 

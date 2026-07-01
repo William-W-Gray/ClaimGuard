@@ -50,8 +50,9 @@ export async function fetchUsers(): Promise<UserSummary[]> {
   return api.get<UserSummary[]>('/users');
 }
 
-export async function logoutRequest(refreshToken: string): Promise<void> {
-  await api.post('/auth/logout', { refreshToken });
+export async function logoutRequest(): Promise<void> {
+  // Refresh token is read from the httpOnly cookie server-side.
+  await api.post('/auth/logout', {});
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────

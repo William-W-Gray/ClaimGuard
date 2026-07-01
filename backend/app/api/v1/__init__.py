@@ -1,5 +1,10 @@
-"""API v1 router aggregation."""
-from fastapi import APIRouter
+"""API v1 router aggregation.
+
+Security posture: this is a PHI system, so **every data endpoint requires
+authentication**. Only health checks, the auth flow, and the (separately
+token-authenticated) WebSocket are mounted without the global auth dependency.
+"""
+from fastapi import APIRouter, Depends
 
 from app.api.v1 import (
     auth,
@@ -16,18 +21,24 @@ from app.api.v1 import (
     users,
     websocket,
 )
+from app.core.dependencies import get_current_user
 
 api_router = APIRouter()
-api_router.include_router(health.router)
-api_router.include_router(auth.router)
-api_router.include_router(claims.router)
-api_router.include_router(providers.router)
-api_router.include_router(trustscore.router)
-api_router.include_router(members.router)
-api_router.include_router(dashboard.router)
-api_router.include_router(fraudshield.router)
-api_router.include_router(investigations.router)
-api_router.include_router(users.router)
-api_router.include_router(notifications.router)
-api_router.include_router(demo.router)
-api_router.include_router(websocket.router)
+
+# ── Public (no auth) ────────────────────────────────────────────────────────────
+api_router.include_router(health.router)     # liveness/readiness probes
+api_router.include_router(auth.router)        # login / refresh / logout
+api_router.include_router(websocket.router)   # authenticates via token on connect
+
+# ── Authenticated (PHI + actions) ───────────────────────────────────────────────
+protected = [Depends(get_current_user)]
+api_router.include_router(claims.router, dependencies=protected)
+api_router.include_router(providers.router, dependencies=protected)
+api_router.include_router(trustscore.router, dependencies=protected)
+api_router.include_router(members.router, dependencies=protected)
+api_router.include_router(dashboard.router, dependencies=protected)
+api_router.include_router(fraudshield.router, dependencies=protected)
+api_router.include_router(investigations.router, dependencies=protected)
+api_router.include_router(users.router, dependencies=protected)
+api_router.include_router(notifications.router, dependencies=protected)
+api_router.include_router(demo.router, dependencies=protected)

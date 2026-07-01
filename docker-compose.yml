@@ -21,6 +21,11 @@ x-backend-env: &backend-env
   CELERY_RESULT_BACKEND: redis://redis:6379/2
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-compose-secret-not-for-real-prod}
   CORS_ORIGINS: http://localhost:8080
+  # Refresh-token cookie. Secure=false lets the http://localhost demo work; set
+  # COOKIE_SECURE=true (and serve over HTTPS) for any real deployment. SameSite
+  # strict is safe because the SPA and API are same-origin behind nginx.
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  COOKIE_SAMESITE: ${COOKIE_SAMESITE:-strict}
 
 services:
   # Local Postgres — only started with the `local-db` profile (managed DB is default).

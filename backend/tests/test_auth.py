@@ -43,10 +43,14 @@ async def test_refresh_rotates_token(client: AsyncClient):
         json={"email": "admin@claimguard.co.zw", "password": "ChangeMe!2026"},
     )
     refresh_token = login.json()["data"]["refreshToken"]
+    # The refresh cookie normally takes precedence; clear the jar so we exercise
+    # the explicit body token (and can reuse the *old* one below).
+    client.cookies.clear()
     resp = await client.post("/api/v1/auth/refresh", json={"refreshToken": refresh_token})
     assert resp.status_code == 200
     assert resp.json()["data"]["accessToken"]
     # Old token is now revoked (single-use rotation).
+    client.cookies.clear()
     reuse = await client.post("/api/v1/auth/refresh", json={"refreshToken": refresh_token})
     assert reuse.status_code == 401
 

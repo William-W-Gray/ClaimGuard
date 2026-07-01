@@ -49,6 +49,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Defense-in-depth headers on every API response (nginx adds them for the SPA)."""
+
     async def dispatch(self, request: Request, call_next):  # noqa: ANN001
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -57,9 +59,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault(
             "Permissions-Policy", "geolocation=(), microphone=(), camera=()"
         )
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        # API responses carry PHI — never cache them anywhere.
+        if request.url.path.startswith(settings.api_v1_prefix):
+            response.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate")
+            response.headers.setdefault("Pragma", "no-cache")
         if settings.is_production:
             response.headers.setdefault(
-                "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
+                "Strict-Transport-Security",
+                "max-age=63072000; includeSubDomains; preload",
             )
         return response
 

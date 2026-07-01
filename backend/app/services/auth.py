@@ -1,13 +1,15 @@
 """Authentication service: login, refresh-token rotation, user provisioning."""
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
 
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import AuthenticationError, ConflictError
+from app.core.exceptions import AuthenticationError, ConflictError, RateLimitError
+from app.core.redis import redis_client
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -52,8 +54,36 @@ class AuthService:
             expires_in=settings.access_token_expire_minutes * 60,
         ).model_dump(by_alias=True)
 
-    async def login(self, email: str, password: str) -> dict:
-        user = await self.authenticate(email, password)
+    @staticmethod
+    def _lock_key(email: str, ip: str) -> str:
+        return f"authlock:{email.lower()}:{ip}"
+
+    async def login(self, email: str, password: str, ip: str = "unknown") -> dict:
+        key = self._lock_key(email, ip)
+        try:
+            fails = int(await redis_client.client.get(key) or 0)
+        except Exception:
+            fails = 0
+        if fails >= settings.auth_max_failures:
+            raise RateLimitError(
+                "Too many failed sign-in attempts. Please try again later."
+            )
+
+        try:
+            user = await self.authenticate(email, password)
+        except AuthenticationError:
+            # Count the failure and (re)set the lockout window.
+            try:
+                count = await redis_client.client.incr(key)
+                if count == 1:
+                    await redis_client.client.expire(key, settings.auth_lockout_seconds)
+            except Exception:
+                pass
+            raise
+
+        # Success — clear any failure counter.
+        with contextlib.suppress(Exception):
+            await redis_client.client.delete(key)
         user.last_login_at = datetime.now(UTC)
         await self.session.flush()
         return await self._issue_tokens(user)
