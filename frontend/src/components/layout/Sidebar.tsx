@@ -16,6 +16,10 @@ interface NavItem {
   highlight?: boolean;
 }
 
+// The demo scenario runner only exists on the backend when DEMO_MODE is on, so
+// only surface its page in demo builds (VITE_DEMO_MODE=true).
+const IS_DEMO = import.meta.env.VITE_DEMO_MODE === 'true';
+
 const NAV_ITEMS: NavItem[] = [
   { to: '/dashboard', label: 'Command Centre', icon: LayoutDashboard },
   { to: '/queue', label: 'Investigation Queue', icon: ListFilter },
@@ -24,7 +28,9 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/members', label: 'Member Portal', icon: Users },
   { to: '/ussd', label: 'USSD Service', icon: Hash },
   { to: '/roi', label: 'ROI Calculator', icon: Calculator },
-  { to: '/demo', label: 'Demo Control Panel', icon: PlayCircle, highlight: true },
+  ...(IS_DEMO
+    ? [{ to: '/demo', label: 'Demo Control Panel', icon: PlayCircle, highlight: true }]
+    : []),
 ];
 
 export function Sidebar() {
