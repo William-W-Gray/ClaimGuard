@@ -1,10 +1,12 @@
-"""Notification service + multi-channel dispatch abstraction (demo adapters)."""
+"""Notification service + multi-channel dispatch (real Email/WhatsApp + fallbacks)."""
 from __future__ import annotations
 
+from email.message import EmailMessage
 from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
 from app.core.websocket import WSEventType, publish
@@ -14,7 +16,7 @@ from app.schemas.investigation import NotificationOut
 log = get_logger(__name__)
 
 
-# ── Channel adapters (swap for Twilio / Meta WhatsApp / SMS aggregator) ─────────
+# ── Channel adapters ─────────────────────────────────────────────────────────
 class ChannelAdapter(Protocol):
     channel: str
 
@@ -22,6 +24,8 @@ class ChannelAdapter(Protocol):
 
 
 class _LoggingAdapter:
+    """No-op adapter — logs the dispatch. Used when a channel isn't configured."""
+
     def __init__(self, channel: str) -> None:
         self.channel = channel
 
@@ -30,13 +34,80 @@ class _LoggingAdapter:
         return True
 
 
-CHANNELS: dict[str, ChannelAdapter] = {
-    "WHATSAPP": _LoggingAdapter("WHATSAPP"),
-    "SMS": _LoggingAdapter("SMS"),
-    "USSD": _LoggingAdapter("USSD"),
-    "EMAIL": _LoggingAdapter("EMAIL"),
-    "APP_FEED": _LoggingAdapter("APP_FEED"),
-}
+class SMTPEmailAdapter:
+    """Sends email via async SMTP (aiosmtplib). Configured from SMTP_* settings."""
+
+    channel = "EMAIL"
+
+    async def send(self, to: str, title: str, message: str) -> bool:
+        import aiosmtplib
+
+        msg = EmailMessage()
+        msg["From"] = settings.smtp_from
+        msg["To"] = to
+        msg["Subject"] = title
+        msg.set_content(message)
+        await aiosmtplib.send(
+            msg,
+            hostname=settings.smtp_host,
+            port=settings.smtp_port,
+            username=settings.smtp_user or None,
+            password=settings.smtp_password or None,
+            start_tls=settings.smtp_starttls,
+            timeout=15,
+        )
+        log.info("notification.email.sent", to=to, title=title)
+        return True
+
+
+class TwilioWhatsAppAdapter:
+    """Sends WhatsApp messages via the Twilio REST API. Configured from TWILIO_*."""
+
+    channel = "WHATSAPP"
+
+    async def send(self, to: str, title: str, message: str) -> bool:
+        import httpx
+
+        url = (
+            "https://api.twilio.com/2010-04-01/Accounts/"
+            f"{settings.twilio_account_sid}/Messages.json"
+        )
+        form = {
+            "From": f"whatsapp:{settings.twilio_whatsapp_from}",
+            "To": f"whatsapp:{to}",
+            "Body": f"*{title}*\n\n{message}",
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                url,
+                data=form,
+                auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+            )
+            resp.raise_for_status()
+        log.info("notification.whatsapp.sent", to=to, title=title)
+        return True
+
+
+def _build_channels() -> dict[str, ChannelAdapter]:
+    """Pick a real adapter when its channel is configured, else log-only."""
+    email: ChannelAdapter = (
+        SMTPEmailAdapter() if settings.email_configured else _LoggingAdapter("EMAIL")
+    )
+    whatsapp: ChannelAdapter = (
+        TwilioWhatsAppAdapter()
+        if settings.whatsapp_configured
+        else _LoggingAdapter("WHATSAPP")
+    )
+    return {
+        "WHATSAPP": whatsapp,
+        "SMS": _LoggingAdapter("SMS"),
+        "USSD": _LoggingAdapter("USSD"),
+        "EMAIL": email,
+        "APP_FEED": _LoggingAdapter("APP_FEED"),
+    }
+
+
+CHANNELS: dict[str, ChannelAdapter] = _build_channels()
 
 
 class NotificationService:
@@ -66,6 +137,7 @@ class NotificationService:
         type_: str = "info",
         channel: str | None = None,
         link: str | None = None,
+        recipient: str | None = None,
     ) -> dict:
         notif = await self.repo.create(
             user_id=user_id,
@@ -75,10 +147,22 @@ class NotificationService:
             channel=channel,
             link=link,
         )
+        # Out-of-band delivery (email/WhatsApp). Never let a delivery failure break
+        # the in-app notification — it's persisted and pushed over WS regardless.
         if channel and channel in CHANNELS:
-            notif.delivered = await CHANNELS[channel].send(
-                to=str(user_id or "broadcast"), title=title, message=message
-            )
+            to = recipient or (str(user_id) if user_id else "broadcast")
+            try:
+                notif.delivered = await CHANNELS[channel].send(
+                    to=to, title=title, message=message
+                )
+            except Exception as exc:
+                log.warning(
+                    "notification.delivery_failed",
+                    channel=channel,
+                    to=to,
+                    error=str(exc),
+                )
+                notif.delivered = False
         await self.session.flush()
         publish(
             WSEventType.NOTIFICATION_SENT,

@@ -88,6 +88,12 @@ WebSocket calls.
 - **Web concurrency**: the API runs under gunicorn with `WEB_CONCURRENCY` uvicorn workers
   (default 2). Realtime events fan out across workers via a Redis pub/sub backplane, so
   scaling workers/instances is safe. Raise `WEB_CONCURRENCY` for a bigger plan.
+- **Notification delivery** (email/WhatsApp) is opt-in. Without credentials, dispatch is
+  logged only (in-app bell + WebSocket still work). To enable, set on the Render service:
+  - **Email (SMTP)**: `SMTP_HOST`, `SMTP_PORT` (default 587), `SMTP_USER`, `SMTP_PASSWORD`,
+    `SMTP_FROM`, `SMTP_STARTTLS` (default true). Case assignments then email the assignee.
+  - **WhatsApp (Twilio)**: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`
+    (e.g. `+14155238886`).
 - **Render free web** spins down on idle (cold starts). Use the `starter` plan (default in
   the blueprint) to stay warm.
 - **Secrets** live in Render/Vercel env settings — never commit them. `JWT_SECRET_KEY` is

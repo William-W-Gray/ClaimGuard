@@ -82,6 +82,33 @@ class Settings(BaseSettings):
     first_admin_email: str = "admin@claimguard.co.zw"
     first_admin_password: str = "ChangeMe!2026"
 
+    # ── Notification delivery ────────────────────────────────────────────────
+    # Real delivery is opt-in: when the credentials for a channel are absent the
+    # adapter logs only (keeps the demo working with no external services).
+    # Email (SMTP)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "ClaimGuard 360 <no-reply@claimguard.co.zw>"
+    smtp_starttls: bool = True
+    # WhatsApp (Twilio)
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_whatsapp_from: str = ""  # e.g. +14155238886
+
+    @property
+    def email_configured(self) -> bool:
+        return bool(self.smtp_host)
+
+    @property
+    def whatsapp_configured(self) -> bool:
+        return bool(
+            self.twilio_account_sid
+            and self.twilio_auth_token
+            and self.twilio_whatsapp_from
+        )
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:

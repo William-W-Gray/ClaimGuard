@@ -12,6 +12,7 @@ from app.repositories.investigation import (
     CommentRepository,
     InvestigationRepository,
 )
+from app.repositories.user import UserRepository
 from app.schemas.investigation import CommentOut, InvestigationOut
 from app.services.notifications import NotificationService
 
@@ -55,19 +56,30 @@ class InvestigationService:
         self.repo = InvestigationRepository(session)
         self.comments = CommentRepository(session)
         self.claims = ClaimRepository(session)
+        self.users = UserRepository(session)
         self.notifications = NotificationService(session)
 
     async def _notify_assignment(self, inv: Investigation, assignee_id: str, actor: str) -> None:
-        """Notify a user their case was assigned — unless they assigned it themselves."""
+        """Notify a user their case was assigned — unless they assigned it themselves.
+
+        Delivered in-app (bell + WS) AND by email to the assignee. Email is a
+        no-op log when SMTP isn't configured (demo)."""
         if not assignee_id or assignee_id == actor:
             return
         claim_ref = inv.claim.claim_ref if inv.claim else "a claim"
+        assignee = await self.users.get(assignee_id)
+        link = f"/investigations/{inv.id}"
         await self.notifications.create(
             user_id=assignee_id,
             title="📋 Case Assigned to You",
-            message=f"You've been assigned the investigation for claim {claim_ref}.",
+            message=(
+                f"You've been assigned the investigation for claim {claim_ref}. "
+                f"Open it in ClaimGuard: {link}"
+            ),
             type_="info",
-            link=f"/investigations/{inv.id}",
+            channel="EMAIL",
+            link=link,
+            recipient=assignee.email if assignee else None,
         )
 
     async def list_page(
