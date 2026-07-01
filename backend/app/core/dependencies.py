@@ -1,0 +1,102 @@
+"""FastAPI dependencies: DB session, current user, RBAC guards, pagination."""
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Annotated
+
+import jwt
+from fastapi import Depends, Query, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.exceptions import AuthenticationError, PermissionDeniedError
+from app.core.security import decode_token
+
+bearer_scheme = HTTPBearer(auto_error=False)
+
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+@dataclass(slots=True)
+class CurrentUser:
+    id: str
+    roles: list[str]
+    permissions: list[str]
+
+    @property
+    def is_superuser(self) -> bool:
+        return "*" in self.permissions
+
+    def has_permission(self, code: str) -> bool:
+        return self.is_superuser or code in self.permissions
+
+    def has_any_role(self, roles: set[str]) -> bool:
+        return self.is_superuser or bool(set(self.roles) & roles)
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> CurrentUser:
+    if credentials is None:
+        raise AuthenticationError("Missing bearer token")
+    try:
+        payload = decode_token(credentials.credentials, expected_type="access")
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthenticationError("Access token has expired") from exc
+    except jwt.PyJWTError as exc:
+        raise AuthenticationError("Invalid access token") from exc
+
+    return CurrentUser(
+        id=payload["sub"],
+        roles=payload.get("roles", []),
+        permissions=payload.get("perms", []),
+    )
+
+
+CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
+
+
+def require_roles(*roles: str) -> Callable:
+    required = set(roles)
+
+    async def _guard(user: CurrentUserDep) -> CurrentUser:
+        if not user.has_any_role(required):
+            raise PermissionDeniedError(
+                f"Requires one of roles: {', '.join(sorted(required))}"
+            )
+        return user
+
+    return _guard
+
+
+def require_permission(code: str) -> Callable:
+    async def _guard(user: CurrentUserDep) -> CurrentUser:
+        if not user.has_permission(code):
+            raise PermissionDeniedError(f"Requires permission: {code}")
+        return user
+
+    return _guard
+
+
+@dataclass(slots=True)
+class Pagination:
+    page: int
+    page_size: int
+
+
+def pagination_params(
+    page: int = Query(1, ge=1, description="1-indexed page number"),
+    page_size: int = Query(
+        10, ge=1, le=100, description="Items per page (5,10,15,20,25,50)"
+    ),
+) -> Pagination:
+    return Pagination(page=page, page_size=page_size)
+
+
+PaginationDep = Annotated[Pagination, Depends(pagination_params)]
+
+
+def client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"

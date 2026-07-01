@@ -1,0 +1,101 @@
+# ─── ClaimGuard 360° — full stack ──────────────────────────────────────────────
+# One command:  docker compose up --build
+# Then open:     http://localhost:8080   (web UI, proxies /api + /ws to the backend)
+# API docs:      http://localhost:8000/docs
+#
+# Demo login:    admin@claimguard.co.zw / ChangeMe!2026  (pre-filled on the login page)
+
+name: claimguard
+
+x-backend-env: &backend-env
+  ENVIRONMENT: production
+  DEBUG: "false"
+  LOG_JSON: "true"
+  DATABASE_URL: postgresql+asyncpg://claimguard:claimguard@db:5432/claimguard
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  JWT_SECRET_KEY: change-me-compose-secret-not-for-real-prod
+  CORS_ORIGINS: http://localhost:8080
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: claimguard
+      POSTGRES_PASSWORD: claimguard
+      POSTGRES_DB: claimguard
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claimguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile
+    environment:
+      <<: *backend-env
+      SEED_ON_STARTUP: "true"   # migrate + seed demo data on first boot
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["./scripts/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health/liveness"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile
+    environment: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info"]
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile
+    environment: *backend-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.workers.celery_app.celery_app", "beat", "--loglevel=info"]
+
+  web:
+    build:
+      context: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:

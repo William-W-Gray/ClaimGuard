@@ -1,0 +1,216 @@
+// Thin fetch wrapper around the ClaimGuard backend.
+// Unwraps the standard {success, message, data, metadata, errors} envelope,
+// attaches the auth token, transparently refreshes an expired access token,
+// and surfaces clean errors.
+
+export const API_BASE_URL: string =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api/v1';
+
+const ACCESS_KEY = 'cg_access_token';
+const REFRESH_KEY = 'cg_refresh_token';
+
+// ── Token storage ────────────────────────────────────────────────────────────
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(ACCESS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function getRefreshToken(): string | null {
+  try {
+    return localStorage.getItem(REFRESH_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(ACCESS_KEY, token);
+    else localStorage.removeItem(ACCESS_KEY);
+  } catch {
+    /* ignore storage errors (private mode, etc.) */
+  }
+}
+
+export function setTokens(access: string | null, refresh: string | null): void {
+  setToken(access);
+  try {
+    if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
+    else localStorage.removeItem(REFRESH_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearTokens(): void {
+  setTokens(null, null);
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+export interface Envelope<T> {
+  success: boolean;
+  message: string;
+  data: T;
+  metadata: Record<string, unknown>;
+  errors: Array<{ code: string; message: string; field?: string }>;
+}
+
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  constructor(status: number, message: string, code = 'error') {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+interface RequestOptions {
+  method?: string;
+  body?: unknown;
+  params?: Record<string, string | number | boolean | undefined | null>;
+  /** Return null instead of throwing on 404 (used for get-by-id reads). */
+  nullOn404?: boolean;
+  signal?: AbortSignal;
+  /** Internal: skip the auto-refresh retry (prevents loops). */
+  _retried?: boolean;
+}
+
+function buildUrl(path: string, params?: RequestOptions['params']): string {
+  const url = `${API_BASE_URL}${path}`;
+  if (!params) return url;
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      search.append(key, String(value));
+    }
+  }
+  const qs = search.toString();
+  return qs ? `${url}?${qs}` : url;
+}
+
+// ── Token refresh (deduped) ─────────────────────────────────────────────────────
+let refreshInFlight: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  const refresh = getRefreshToken();
+  if (!refresh) return false;
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ refreshToken: refresh }),
+      });
+      if (!res.ok) throw new Error('refresh failed');
+      const payload = (await res.json()) as Envelope<{
+        accessToken: string;
+        refreshToken: string;
+      }>;
+      if (!payload.success) throw new Error(payload.message);
+      setTokens(payload.data.accessToken, payload.data.refreshToken);
+      return true;
+    } catch {
+      clearTokens();
+      // Let the app react (redirect to login).
+      window.dispatchEvent(new Event('cg:logout'));
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
+// ── Core request ────────────────────────────────────────────────────────────────
+async function performFetch(path: string, options: RequestOptions): Promise<Response> {
+  const { method = 'GET', body, params, signal, _retried } = options;
+  const isAuthPath = path.startsWith('/auth/');
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path, params), {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, 'Network error — is the ClaimGuard API running?', 'network');
+  }
+
+  // Transparently refresh an expired access token and retry once.
+  if (response.status === 401 && !isAuthPath && !_retried && getRefreshToken()) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return performFetch(path, { ...options, _retried: true });
+    }
+  }
+  return response;
+}
+
+/** Returns the full response envelope (data + metadata). Throws on failure. */
+export async function requestEnvelope<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<Envelope<T>> {
+  const response = await performFetch(path, options);
+  let payload: Envelope<T> | null = null;
+  try {
+    payload = (await response.json()) as Envelope<T>;
+  } catch {
+    /* non-JSON response */
+  }
+  if (!response.ok || (payload && payload.success === false)) {
+    const message = payload?.message ?? `Request failed (${response.status})`;
+    const code = payload?.errors?.[0]?.code ?? 'error';
+    throw new ApiError(response.status, message, code);
+  }
+  return (payload ?? { success: true, message: 'OK', data: null as T, metadata: {}, errors: [] });
+}
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await performFetch(path, options);
+
+  if (response.status === 404 && options.nullOn404) {
+    return null as T;
+  }
+
+  let payload: Envelope<T> | null = null;
+  try {
+    payload = (await response.json()) as Envelope<T>;
+  } catch {
+    /* non-JSON response */
+  }
+
+  if (!response.ok || (payload && payload.success === false)) {
+    const message = payload?.message ?? `Request failed (${response.status})`;
+    const code = payload?.errors?.[0]?.code ?? 'error';
+    throw new ApiError(response.status, message, code);
+  }
+
+  return payload ? payload.data : (null as T);
+}
+
+export const api = {
+  get: <T>(path: string, opts?: RequestOptions) => request<T>(path, { ...opts, method: 'GET' }),
+  getEnvelope: <T>(path: string, opts?: RequestOptions) =>
+    requestEnvelope<T>(path, { ...opts, method: 'GET' }),
+  post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    request<T>(path, { ...opts, method: 'POST', body }),
+  patch: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    request<T>(path, { ...opts, method: 'PATCH', body }),
+  del: <T>(path: string, opts?: RequestOptions) =>
+    request<T>(path, { ...opts, method: 'DELETE' }),
+};
