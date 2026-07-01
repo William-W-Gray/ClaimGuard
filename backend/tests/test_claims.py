@@ -18,6 +18,12 @@ async def test_queue_requires_auth(client: AsyncClient):
     assert (await client.get("/api/v1/claims")).status_code == 401
 
 
+async def test_queue_accepts_batch_page_size(client: AsyncClient, auth_headers: dict):
+    # The SPA batch-fetches page_size=200 for client-side filtering; must be allowed.
+    resp = await client.get("/api/v1/claims?page=1&page_size=200", headers=auth_headers)
+    assert resp.status_code == 200
+
+
 async def test_queue_search_filter(client: AsyncClient, auth_headers: dict):
     resp = await client.get("/api/v1/claims?search=Tendai", headers=auth_headers)
     assert resp.status_code == 200
