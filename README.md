@@ -80,8 +80,14 @@ Either way, the API container runs Alembic migrations and seeds demo data on boo
 
 ## ✨ Features
 
-- **FraudShield** — explainable claim risk scoring: rule engine → ML adapter →
-  SHAP-style feature contributions → decision engine (approve / verify / investigate).
+- **FraudShield** — explainable claim risk scoring: rule engine → ML ensemble →
+  exact SHAP feature contributions → decision engine (approve / verify / investigate).
+  The ML backend is a **trained XGBoost + IsolationForest ensemble** (TreeSHAP
+  explanations) trained on *synthetic* claims data via `scripts/train_fraud_model.py`
+  — ROC-AUC ≈ 0.99, precision ≈ 0.85, recall ≈ 0.90 at its operating point. It's
+  selected by `ML_ENGINE=auto` and falls back to a dependency-free logistic
+  heuristic if the model artifacts are absent. To train on real claims, see
+  [backend/docs/FRAUDSHIELD_PRODUCTION_DATA.md](backend/docs/FRAUDSHIELD_PRODUCTION_DATA.md).
 - **Real-time** — live claim-scoring feed, member responses, TrustScore changes and
   notifications pushed over a WebSocket gateway.
 - **MemberGuard** — member benefit tracking + WhatsApp/USSD confirm-or-dispute flow.

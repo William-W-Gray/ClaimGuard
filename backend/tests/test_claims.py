@@ -69,6 +69,21 @@ async def test_reject_claim(client: AsyncClient, auth_headers: dict):
     assert resp.json()["data"]["decision"] == "REJECT_FRAUD"
 
 
+async def test_rescore_preserves_persisted_signals(client: AsyncClient, auth_headers: dict):
+    # CG-00112 was seeded with a syndicate flag → syndicate_signal is persisted on
+    # the claim. Rescoring must reproduce that input (re-fire the syndicate rule),
+    # not silently drop it, so the claim stays critical.
+    resp = await client.post("/api/v1/claims/CG-00112/rescore", headers=auth_headers)
+    assert resp.status_code == 200
+
+    detail = (
+        await client.get("/api/v1/claims/CG-00112", headers=auth_headers)
+    ).json()["data"]
+    assert "POTENTIAL_FRAUD_SYNDICATE_DETECTED" in detail["flags"]
+    assert detail["priority"] == "CRITICAL"  # syndicate signal drives critical priority
+    assert detail["riskLevel"] in {"HIGH", "CRITICAL"}
+
+
 async def test_fraudshield_score_endpoint(client: AsyncClient, auth_headers: dict):
     resp = await client.post(
         "/api/v1/fraudshield/score",

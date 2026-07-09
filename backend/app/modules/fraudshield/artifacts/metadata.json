@@ -1,0 +1,36 @@
+{
+  "model_version": "fraudshield-ensemble-synthetic-v1",
+  "data": "synthetic",
+  "generated_at": "2026-07-09T12:11:24.191875+00:00",
+  "n_samples": 50000,
+  "seed": 42,
+  "fraud_rate": 0.02528,
+  "feature_names": [
+    "shortfall_ratio",
+    "claimed_amount",
+    "provider_flags_90d",
+    "low_trust",
+    "no_biometric",
+    "prescription_after_service",
+    "chronic_drug_no_condition",
+    "syndicate_signal",
+    "num_conditions",
+    "num_items"
+  ],
+  "ensemble_weights": {
+    "xgboost": 0.7,
+    "isolation_forest": 0.3
+  },
+  "iforest_decision_mean": 0.1719007229766531,
+  "iforest_decision_std": 0.06458658401096273,
+  "shap_margin_scale": 10.0,
+  "metrics": {
+    "roc_auc": 0.9967,
+    "pr_auc": 0.9434,
+    "precision": 0.8507,
+    "recall": 0.9012,
+    "f1": 0.8752,
+    "operating_threshold": 0.6684,
+    "best_iteration": 77
+  }
+}

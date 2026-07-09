@@ -40,7 +40,12 @@ export function MetricCards() {
       subtitle: `${data.pendingInvestigation} under investigation`,
       icon: <AlertTriangle size={20} />,
       accentColor: '#DC2626',
-      trend: { value: `${((data.flaggedToday / data.claimsToday) * 100).toFixed(1)}% flag rate`, positive: false },
+      trend: {
+        value: data.claimsToday > 0
+          ? `${((data.flaggedToday / data.claimsToday) * 100).toFixed(1)}% flag rate`
+          : 'No claims yet today',
+        positive: false,
+      },
     },
     {
       title: 'Estimated Saved',

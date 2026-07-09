@@ -77,8 +77,12 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
 
     # ── FraudShield ──────────────────────────────────────────────────────────
-    # Selects the ML backend in fraudshield.ml_engine (currently: "heuristic").
-    ml_engine: str = "heuristic"
+    # ML backend: "auto" (trained ensemble if artifacts present, else heuristic),
+    # "trained" (force XGBoost+IsolationForest), or "heuristic" (dependency-free).
+    ml_engine: str = "auto"
+    # Override the trained-model artifacts directory; blank uses the packaged dir
+    # (app/modules/fraudshield/artifacts/).
+    ml_artifacts_dir: str = ""
 
     # ── Demo / seed ────────────────────────────────────────────────────────
     demo_mode: bool = True

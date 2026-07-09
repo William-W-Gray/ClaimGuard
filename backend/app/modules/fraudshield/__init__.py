@@ -8,7 +8,8 @@ Pipeline (adapter chain, ML-swappable):
     RuleEngine          → deterministic clinical/financial rules + flags
         │
         ▼
-    MLEngine (adapter)  → anomaly probability (mock today, XGBoost/IForest later)
+    MLEngine (adapter)  → anomaly probability (trained XGBoost + IsolationForest
+                          ensemble, or a heuristic fallback — see ml_engine)
         │
         ▼
     ExplanationEngine   → SHAP-style feature contributions + narrative

@@ -212,6 +212,13 @@ async def seed_claims(session) -> None:
         claim.flags = [
             ClaimFlag(code=code, severity=sev) for (code, sev) in c["flags"]
         ]
+        # Derive the persisted FraudShield input signals from the flags so a
+        # later rescore reproduces the same inputs (keeps seed data DRY).
+        flag_codes = {code for (code, _sev) in c["flags"]}
+        claim.prescription_after_service = "PRESCRIPTION_DATE_AFTER_SERVICE" in flag_codes
+        claim.has_biometric = "HIGH_VALUE_NO_BIOMETRIC" not in flag_codes
+        claim.chronic_drug_no_condition = "CHRONIC_DRUG_NO_CONDITION_REGISTERED" in flag_codes
+        claim.syndicate_signal = "POTENTIAL_FRAUD_SYNDICATE_DETECTED" in flag_codes
         claim.shap_contributions = [
             ShapContribution(feature=f, contribution=val, direction=d)
             for (f, val, d) in c["shap"]

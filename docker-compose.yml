@@ -15,6 +15,10 @@ x-backend-env: &backend-env
   ENVIRONMENT: production
   DEBUG: "false"
   LOG_JSON: "true"
+  # FraudShield ML backend: "auto" uses the trained XGBoost+IsolationForest
+  # ensemble (artifacts baked into the image) and falls back to the heuristic
+  # model if they're missing. Set "heuristic" to force the dependency-free model.
+  ML_ENGINE: ${ML_ENGINE:-auto}
   DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://claimguard:claimguard@db:5432/claimguard}
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/1

@@ -127,6 +127,10 @@ class ClaimService:
             provider_flags_90d=claim.provider.flags_90d if claim.provider else 0,
             member_conditions=claim.member.conditions if claim.member else [],
             item_descriptions=[i.description for i in claim.items],
+            prescription_after_service=claim.prescription_after_service,
+            has_biometric=claim.has_biometric,
+            chronic_drug_no_condition=claim.chronic_drug_no_condition,
+            syndicate_signal=claim.syndicate_signal,
         )
 
     def _apply_result(self, claim: Claim, result: ScoringResult) -> None:
