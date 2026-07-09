@@ -1,12 +1,13 @@
 import { Link, useLocation } from '@tanstack/react-router';
 import {
   LayoutDashboard, ListFilter, ShieldCheck, Users, Hash,
-  PlayCircle, Calculator, ChevronLeft, ChevronRight, Activity, FolderSearch,
+  PlayCircle, Calculator, ChevronLeft, ChevronRight, Activity, FolderSearch, UserCog,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/uiStore';
 import { useWSStore } from '@/stores/wsStore';
+import { useAuthStore } from '@/stores/authStore';
 import { LiveDot } from '@/components/shared/LiveDot';
 
 interface NavItem {
@@ -14,6 +15,7 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   highlight?: boolean;
+  adminOnly?: boolean;
 }
 
 // The demo scenario runner only exists on the backend when DEMO_MODE is on, so
@@ -28,6 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/members', label: 'Member Portal', icon: Users },
   { to: '/ussd', label: 'USSD Service', icon: Hash },
   { to: '/roi', label: 'ROI Calculator', icon: Calculator },
+  { to: '/team', label: 'User Management', icon: UserCog, adminOnly: true },
   ...(IS_DEMO
     ? [{ to: '/demo', label: 'Demo Control Panel', icon: PlayCircle, highlight: true }]
     : []),
@@ -37,6 +40,9 @@ export function Sidebar() {
   const { sidebarOpen, toggleSidebar } = useUIStore();
   const { connected } = useWSStore();
   const location = useLocation();
+  const user = useAuthStore((s) => s.user);
+  const isAdmin = !!user && (user.roles.includes('admin') || user.isSuperuser);
+  const navItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
   return (
     <aside
@@ -87,7 +93,7 @@ export function Sidebar() {
         {sidebarOpen && (
           <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-600 px-3 mb-2">Platform</p>
         )}
-        {NAV_ITEMS.map(({ to, label, icon: Icon, highlight }) => {
+        {navItems.map(({ to, label, icon: Icon, highlight }) => {
           const isActive = location.pathname === to || location.pathname.startsWith(to + '/');
           return (
             <Link

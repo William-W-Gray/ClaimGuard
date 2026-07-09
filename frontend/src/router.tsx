@@ -17,6 +17,7 @@ import { MemberPortalPage } from '@/routes/MemberPortalPage';
 import { DemoControlPage } from '@/routes/DemoControlPage';
 import { ROICalculatorPage } from '@/routes/ROICalculatorPage';
 import { USSDSimulatorPage } from '@/routes/USSDSimulatorPage';
+import { UserManagementPage } from '@/routes/UserManagementPage';
 
 // ─── Root Route ───────────────────────────────────────────────────────────────
 
@@ -115,6 +116,14 @@ const ussdRoute = createRoute({
   component: USSDSimulatorPage,
 });
 
+// ─── User management (admin) ────────────────────────────────────────────────────
+
+const usersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/team',
+  component: UserManagementPage,
+});
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 const routeTree = rootRoute.addChildren([
@@ -130,6 +139,7 @@ const routeTree = rootRoute.addChildren([
   demoRoute,
   roiRoute,
   ussdRoute,
+  usersRoute,
 ]);
 
 export const router = createRouter({ routeTree });

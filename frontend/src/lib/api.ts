@@ -50,6 +50,17 @@ export async function fetchUsers(): Promise<UserSummary[]> {
   return api.get<UserSummary[]>('/users');
 }
 
+export interface NewUserInput {
+  fullName: string;
+  email: string;
+  password: string;
+  roles: string[];
+}
+
+export async function createUser(input: NewUserInput): Promise<{ id: string; email: string }> {
+  return api.post<{ id: string; email: string }>('/auth/users', input);
+}
+
 export async function logoutRequest(): Promise<void> {
   // Refresh token is read from the httpOnly cookie server-side.
   await api.post('/auth/logout', {});
