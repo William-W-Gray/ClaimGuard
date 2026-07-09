@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from app.modules.fraudshield.context import Flag, ScoringContext, ShapValue
+from app.modules.fraudshield.features import FEATURE_LABELS
 
+# Shared model-feature labels, plus labels for the "amount" alias and the
+# rule-engine's provider-reputation modifier.
 _FEATURE_LABELS = {
-    "shortfall_ratio": "Member shortfall vs expected",
+    **FEATURE_LABELS,
     "amount": "Claim amount",
-    "provider_flags_90d": "Provider flag history (90d)",
-    "low_trust": "Provider trust deficit",
-    "no_biometric": "Missing biometric verification",
     "PROVIDER_TRUSTED": "Trusted provider (mitigating)",
 }
 
@@ -24,6 +24,11 @@ class ExplanationEngine:
             for feature, value in source.items():
                 merged[feature] = merged.get(feature, 0.0) + value
 
+        # Normalize to signed shares of the total absolute impact so the values
+        # render as sensible percentages (the UI shows |contribution| * 100),
+        # regardless of the backend's native score scale.
+        total = sum(abs(v) for v in merged.values()) or 1.0
+
         shap: list[ShapValue] = []
         for feature, value in merged.items():
             if abs(value) < 1e-6:
@@ -32,7 +37,7 @@ class ExplanationEngine:
             shap.append(
                 ShapValue(
                     feature=label,
-                    contribution=round(value, 4),
+                    contribution=round(value / total, 4),
                     direction="positive" if value > 0 else "negative",
                 )
             )

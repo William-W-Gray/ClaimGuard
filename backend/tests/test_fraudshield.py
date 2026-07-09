@@ -9,7 +9,10 @@ from app.modules.fraudshield.ml_engine import HeuristicRiskModel, get_ml_engine
 from app.modules.fraudshield.service import FraudShieldService
 from app.modules.trustscore.service import TrustInputs, trustscore_service
 
-service = FraudShieldService()
+# Pin these pipeline/rule tests to the deterministic heuristic backend so they
+# assert rule + decision logic independently of whichever ML backend is configured
+# (the trained ensemble is covered separately in test_fraudshield_ml.py).
+service = FraudShieldService(ml_engine=HeuristicRiskModel())
 
 
 def test_clean_claim_is_low_risk_and_approved():
@@ -105,7 +108,10 @@ def test_result_carries_model_identity():
     assert 0.0 <= result.anomaly_probability <= 1.0
 
 
-def test_ml_engine_factory_selects_heuristic():
+def test_ml_engine_factory_selects_heuristic(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ml_engine", "heuristic")
     assert isinstance(get_ml_engine(), HeuristicRiskModel)
 
 

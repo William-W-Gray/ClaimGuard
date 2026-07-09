@@ -1,23 +1,31 @@
 """ML scoring adapter.
 
-`MLEngine` is the interface the pipeline depends on. The shipped implementation
-is `HeuristicRiskModel` — a **calibrated logistic model** over normalized claim
-features. It is deterministic, dependency-free, and serves as the production
-scorer until a trained model is introduced.
+`MLEngine` is the interface the pipeline depends on. Two backends ship:
 
-This is a real model (fixed coefficients + logistic link), not a placeholder: it
-produces an anomaly probability and per-feature contributions used for the SHAP
-explanation. To drop in a learned model later (XGBoost, IsolationForest, or a
-hosted endpoint), implement the `MLEngine` Protocol, register it below, and
-select it via the `ML_ENGINE` setting — no caller changes (Dependency Inversion).
+* ``TrainedEnsembleModel`` (``ml_trained``) — a **trained** XGBoost +
+  IsolationForest ensemble with exact TreeSHAP explanations, produced by
+  ``scripts/train_fraud_model.py`` on synthetic data. Selected by ML_ENGINE
+  ``trained`` (or ``auto`` when its artifacts are present).
+* ``HeuristicRiskModel`` — a dependency-free calibrated logistic model over
+  normalized claim features (fixed coefficients + logistic link). The fallback
+  when the trained artifacts / ML libraries are unavailable.
+
+The backend is chosen in one place — ``get_ml_engine()`` — via the ``ML_ENGINE``
+setting, so callers never change (Dependency Inversion). ``auto`` (the default)
+prefers the trained ensemble and degrades gracefully to the heuristic.
 """
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Protocol
+
+import structlog
 
 from app.core.config import settings
 from app.modules.fraudshield.context import ScoringContext
+
+logger = structlog.get_logger(__name__)
 
 
 class MLEngine(Protocol):
@@ -69,20 +77,37 @@ class HeuristicRiskModel:
         return {k: round(self._COEF[k] * v, 4) for k, v in feats.items()}
 
 
+def _make_trained() -> MLEngine:
+    from app.modules.fraudshield.ml_trained import get_trained_engine
+
+    return get_trained_engine()
+
+
 # Backends registered here; `get_ml_engine()` picks one from settings.ml_engine.
-_ENGINES: dict[str, type] = {
+# "auto" is resolved in the factory (prefer trained, fall back to heuristic).
+_ENGINES: dict[str, Callable[[], MLEngine]] = {
     "heuristic": HeuristicRiskModel,
+    "trained": _make_trained,
 }
 
 
 def get_ml_engine() -> MLEngine:
     """Factory — the single place model backends are selected (via ML_ENGINE)."""
     key = settings.ml_engine.lower()
-    engine_cls = _ENGINES.get(key)
-    if engine_cls is None:
+
+    if key == "auto":
+        from app.modules.fraudshield.ml_trained import TrainedEnsembleModel
+
+        if TrainedEnsembleModel.available():
+            return _make_trained()
+        logger.info("fraudshield.ml_engine.fallback", reason="trained artifacts unavailable")
+        return HeuristicRiskModel()
+
+    factory = _ENGINES.get(key)
+    if factory is None:
         raise NotImplementedError(
             f"Unknown ML_ENGINE '{settings.ml_engine}'. "
-            f"Available: {', '.join(sorted(_ENGINES))}. "
+            f"Available: auto, {', '.join(sorted(_ENGINES))}. "
             "Register a trained-model backend in fraudshield.ml_engine._ENGINES."
         )
-    return engine_cls()
+    return factory()
