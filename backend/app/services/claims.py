@@ -1,18 +1,26 @@
 """Claims application service — queue, detail, lifecycle actions, scoring."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.core.websocket import WSEventType, publish
-from app.models.claim import Claim, ClaimFlag, ShapContribution, TimelineEvent
+from app.models.claim import Claim, ClaimFlag, ClaimItem, ShapContribution, TimelineEvent
 from app.modules.fraudshield import ScoringContext, ScoringResult
 from app.modules.fraudshield.service import fraudshield_service
+from app.modules.fraudshield.signals import SignalInputs, derive_input_signals
 from app.repositories.claim import ClaimRepository
-from app.schemas.claim import claim_to_detail, claim_to_summary
+from app.repositories.member import MemberRepository
+from app.repositories.provider import ProviderRepository
+from app.schemas.claim import ClaimIngest, claim_to_detail, claim_to_summary
 from app.services.notifications import NotificationService
+
+# Hours until an un-actioned claim auto-approves / breaches SLA.
+_AUTO_APPROVE_HOURS = 72
+_SLA_HOURS = 48
 
 _REJECT_REASONS = {"REJECT_FRAUD", "REJECT_ERROR"}
 
@@ -113,6 +121,117 @@ class ClaimService:
         await self._add_timeline(claim, "Note added", note, actor)
         await self.session.flush()
         return claim_to_detail(claim)
+
+    # ── Ingestion ──────────────────────────────────────────────────────────────
+    async def _unique_claim_ref(self) -> str:
+        """Generate a CG-##### reference not already in use."""
+        for _ in range(10):
+            ref = f"CG-{uuid.uuid4().int % 100000:05d}"
+            if not await self.repo.get_by_ref(ref):
+                return ref
+        # Astronomically unlikely fallback: use a wider space.
+        return f"CG-{uuid.uuid4().hex[:8]}"
+
+    async def ingest(self, payload: ClaimIngest, actor: str = "nh263") -> dict:
+        """Create, signal-populate, and score an incoming claim.
+
+        Derives the four FraudShield input signals (via fraudshield.signals) and
+        persists them on the claim so scoring — now and on any later rescore —
+        sees the same inputs. Idempotent when a claim_ref is supplied.
+        """
+        if payload.claim_ref and (existing := await self.repo.get_by_ref(payload.claim_ref)):
+            return claim_to_detail(existing)  # idempotent re-delivery
+
+        member = await MemberRepository(self.session).get_by_number(payload.member_number)
+        if not member:
+            raise NotFoundError(f"Member {payload.member_number} not found")
+        provider = await ProviderRepository(self.session).get_by_code(payload.provider_code)
+        if not provider:
+            raise NotFoundError(f"Provider {payload.provider_code} not found")
+
+        signals = derive_input_signals(
+            SignalInputs(
+                item_descriptions=[i.description for i in payload.items],
+                member_conditions=member.conditions or [],
+                provider_flags_90d=provider.flags_90d,
+                provider_trust_score=provider.trust_score,
+                service_date=payload.service_date,
+                prescription_date=payload.prescription_date,
+                has_biometric=payload.has_biometric,
+                syndicate_signal=payload.syndicate_signal,
+            )
+        )
+
+        now = datetime.now(UTC)
+        claim = Claim(
+            claim_ref=payload.claim_ref or await self._unique_claim_ref(),
+            nh263_ref=payload.nh263_ref,
+            member_id=member.id,
+            provider_id=provider.id,
+            service_date=payload.service_date,
+            submitted_at=now,
+            claimed_amount=payload.claimed_amount,
+            member_shortfall=payload.member_shortfall,
+            expected_shortfall_min=payload.expected_shortfall_min,
+            expected_shortfall_max=payload.expected_shortfall_max,
+            sla_deadline=now + timedelta(hours=_SLA_HOURS),
+            **signals,
+        )
+        claim.items = [
+            ClaimItem(
+                description=i.description,
+                quantity=i.quantity,
+                unit_price=i.unit_price,
+                total=i.total,
+                icd10_code=i.icd10_code,
+                nappi_code=i.nappi_code,
+            )
+            for i in payload.items
+        ]
+        claim.timeline = [
+            TimelineEvent(
+                timestamp=now,
+                event="Claim submitted",
+                description="Claim received via NH263 ingestion",
+                actor=actor,
+                type="system",
+            )
+        ]
+        await self.repo.add(claim)
+        # Re-load with relationships (member/provider/items) eagerly populated so
+        # scoring and serialization never trigger an async lazy load.
+        claim = await self.repo.get_by_ref(claim.claim_ref) or claim
+
+        # Score on arrival using the freshly-derived signals.
+        result = fraudshield_service.score(self.context_from_claim(claim))
+        self._apply_result(claim, result)
+        claim.auto_approve_at = (
+            now + timedelta(hours=_AUTO_APPROVE_HOURS) if result.decision == "APPROVE" else None
+        )
+        claim.timeline.append(
+            TimelineEvent(
+                timestamp=datetime.now(UTC),
+                event=f"Risk score: {result.risk_score}",
+                description=f"FraudShield decision: {result.decision}",
+                actor="ClaimGuard AI",
+                type="system",
+            )
+        )
+        await self.session.flush()
+
+        scored_payload = {
+            "claimRef": claim.claim_ref,
+            "member": member.name,
+            "riskScore": result.risk_score,
+            "decision": result.decision,
+            "latencyMs": result.latency_ms,
+        }
+        publish(WSEventType.NH263_WEBHOOK, {"claimRef": claim.claim_ref, "source": "NH263"})
+        publish(WSEventType.CLAIM_SCORED, scored_payload)
+        await NotificationService(self.session).create_from_event("claim_scored", scored_payload)
+
+        fresh = await self.repo.get_by_ref(claim.claim_ref)
+        return claim_to_detail(fresh or claim)
 
     # ── Scoring (FraudShield) ──────────────────────────────────────────────────
     @staticmethod

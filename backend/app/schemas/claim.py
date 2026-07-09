@@ -82,6 +82,34 @@ class ClaimOut(ClaimSummary):
         return v
 
 
+class ClaimIngestItem(CamelModel):
+    description: str
+    quantity: int = 1
+    unit_price: float
+    total: float
+    icd10_code: str | None = None
+    nappi_code: str | None = None
+
+
+class ClaimIngest(CamelModel):
+    """Incoming claim payload (e.g. from the NH263 feed) to be scored on arrival."""
+
+    claim_ref: str | None = None  # optional; enables idempotent re-delivery
+    nh263_ref: str | None = None
+    member_number: str
+    provider_code: str
+    service_date: str | None = None
+    claimed_amount: float
+    member_shortfall: float
+    expected_shortfall_min: float
+    expected_shortfall_max: float
+    items: list[ClaimIngestItem] = []
+    # FraudShield input signals — source-provided; the rest are derived at ingest.
+    prescription_date: str | None = None
+    has_biometric: bool | None = None
+    syndicate_signal: bool | None = None
+
+
 def claim_to_summary(claim: Claim) -> dict:
     return ClaimSummary(
         id=str(claim.id),
