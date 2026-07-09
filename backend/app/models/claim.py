@@ -38,6 +38,13 @@ class Claim(BaseEntity):
     expected_shortfall_min: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     expected_shortfall_max: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
 
+    # FraudShield input signals — persisted so a rescore reproduces the same
+    # inputs the scorer saw (these aren't derivable from the other columns).
+    prescription_after_service: Mapped[bool] = mapped_column(default=False)
+    has_biometric: Mapped[bool] = mapped_column(default=True)
+    chronic_drug_no_condition: Mapped[bool] = mapped_column(default=False)
+    syndicate_signal: Mapped[bool] = mapped_column(default=False)
+
     # FraudShield outputs
     risk_score: Mapped[int] = mapped_column(Integer, default=0, index=True)
     risk_level: Mapped[str] = mapped_column(String(16), default="LOW")
