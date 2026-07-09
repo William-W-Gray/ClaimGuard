@@ -16,6 +16,35 @@ Artifacts written to app/modules/fraudshield/artifacts/:
     xgb.json         — XGBoost booster (binary:logistic)
     iforest.joblib   — IsolationForest (unsupervised anomaly detector)
     metadata.json    — feature order, normalisation stats, eval metrics, provenance
+
+────────────────────────────────────────────────────────────────────────────────
+SWAPPING IN REAL DATA (production)
+────────────────────────────────────────────────────────────────────────────────
+`train(X, y, ...)` is data-source-agnostic. To train on real claims:
+
+    from app.modules.fraudshield.features import feature_row, FEATURE_NAMES
+    # X: rows of feature_row(ctx) for historical claims (columns = FEATURE_NAMES)
+    # y: 1 = confirmed fraud, 0 = legitimate (label from investigation outcomes)
+    train(X, y, data_source="production", model_version="fraudshield-prod-v1")
+
+Because inference uses the SAME `feature_row()`, there is no train/serve skew.
+But the model only catches *real* fraud if the following also hold — none are
+guaranteed by this script:
+
+  1. LABELS: y must come from real adjudicated outcomes (e.g. investigations
+     resolved CONFIRMED_FRAUD), not heuristics, or the model learns your rules
+     back instead of fraud.
+  2. INPUT PARITY: the four boolean signals (syndicate/biometric/rx-date/chronic)
+     must be populated on real claims at ingestion — the same fields the trained
+     model saw. If real claims arrive with defaults, those features are dead.
+  3. FEATURE RICHNESS: the current 10 features are a floor. Real fraud usually
+     needs history/velocity/network features — append to FEATURE_NAMES (never
+     reorder) and retrain.
+  4. CALIBRATION: re-tune the ensemble weights (xgb/iforest) and the DecisionEngine
+     fusion/thresholds so anomaly probabilities map to sensible approve/verify/
+     investigate bands on the real score distribution.
+  5. VALIDATION: evaluate on a time-based holdout (train past → test future),
+     not a random split, to get an honest read on production performance.
 """
 from __future__ import annotations
 
@@ -148,9 +177,25 @@ def generate_dataset(n: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(rows, dtype=np.float32), labels
 
 
-def train(n: int, seed: int) -> dict:
-    print(f"[train] generating {n:,} synthetic claims (seed={seed}, fraud≈{FRAUD_RATE:.1%})…")
-    X, y = generate_dataset(n, seed)
+def train(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    seed: int = 42,
+    data_source: str = "synthetic",
+    contamination: float | None = None,
+    artifacts_dir: Path = ARTIFACTS_DIR,
+    model_version: str = MODEL_VERSION,
+) -> dict:
+    """Train + persist the ensemble from a labelled feature matrix.
+
+    Data-source-agnostic: pass any (X, y) whose columns are `FEATURE_NAMES` in
+    order. This is the seam for the real-data swap — see the module docstring.
+    `contamination` (IsolationForest) defaults to the observed fraud rate in y.
+    """
+    fraud_rate = float(y.mean())
+    if contamination is None:
+        contamination = min(max(fraud_rate, 0.001), 0.5)
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=seed, stratify=y
     )
@@ -209,23 +254,23 @@ def train(n: int, seed: int) -> dict:
 
     # ── IsolationForest (unsupervised anomaly signal) ─────────────────────────
     iforest = IsolationForest(
-        n_estimators=200, contamination=FRAUD_RATE, random_state=seed, n_jobs=-1
+        n_estimators=200, contamination=contamination, random_state=seed, n_jobs=-1
     )
     iforest.fit(X_train)
     df_train = iforest.decision_function(X_train)  # higher = more normal
     if_mean, if_std = float(df_train.mean()), float(df_train.std() or 1.0)
 
     # ── Persist ───────────────────────────────────────────────────────────────
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    booster.save_model(ARTIFACTS_DIR / "xgb.json")
-    joblib.dump(iforest, ARTIFACTS_DIR / "iforest.joblib")
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    booster.save_model(artifacts_dir / "xgb.json")
+    joblib.dump(iforest, artifacts_dir / "iforest.joblib")
     metadata = {
-        "model_version": MODEL_VERSION,
-        "data": "synthetic",
+        "model_version": model_version,
+        "data": data_source,
         "generated_at": datetime.now(UTC).isoformat(),
-        "n_samples": n,
+        "n_samples": int(len(y)),
         "seed": seed,
-        "fraud_rate": FRAUD_RATE,
+        "fraud_rate": round(fraud_rate, 5),
         "feature_names": FEATURE_NAMES,
         "ensemble_weights": {"xgboost": 0.7, "isolation_forest": 0.3},
         "iforest_decision_mean": if_mean,
@@ -233,8 +278,8 @@ def train(n: int, seed: int) -> dict:
         "shap_margin_scale": 10.0,
         "metrics": metrics,
     }
-    (ARTIFACTS_DIR / "metadata.json").write_text(json.dumps(metadata, indent=2))
-    print(f"[train] artifacts written to {ARTIFACTS_DIR}")
+    (artifacts_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
+    print(f"[train] artifacts written to {artifacts_dir}")
     return metadata
 
 
@@ -243,7 +288,12 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=50_000, help="number of synthetic claims")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
-    train(args.n, args.seed)
+    print(
+        f"[train] generating {args.n:,} synthetic claims "
+        f"(seed={args.seed}, fraud≈{FRAUD_RATE:.1%})…"
+    )
+    X, y = generate_dataset(args.n, args.seed)
+    train(X, y, seed=args.seed, data_source="synthetic")
 
 
 if __name__ == "__main__":
