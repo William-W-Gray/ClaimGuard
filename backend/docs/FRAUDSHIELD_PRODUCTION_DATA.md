@@ -81,8 +81,21 @@ claim** — the same fields the model saw in training. If real claims arrive wit
 defaults (`has_biometric=True`, the rest `False`), those four features carry no
 information and the model is blind to them.
 
-The demo populates these from seed flags; production must populate them from the
-real upstream data. This is the single most important wiring step.
+**This is wired.** The ingestion endpoint `POST /api/v1/claims/ingest`
+(`ClaimService.ingest`) derives and persists all four signals on every claim as
+it arrives, via `app/modules/fraudshield/signals.py`:
+
+| Signal | How ingestion sets it |
+|--------|-----------------------|
+| `has_biometric` | from the payload (`hasBiometric`); defaults to `true` if the source omits it |
+| `prescription_after_service` | derived from `prescriptionDate` vs `serviceDate` |
+| `chronic_drug_no_condition` | derived: a claim item is a chronic medication (`CHRONIC_MEDICATIONS`) the member has no matching registered condition for |
+| `syndicate_signal` | explicit upstream flag, else derived from provider risk (`flags_90d ≥ 20` and `trust < 50`) |
+
+To adapt for your real feed: point your NH263/claims webhook at `ingest()` (or
+map your payload to the `ClaimIngest` schema), and refine the derivation rules in
+`signals.py` — extend `CHRONIC_MEDICATIONS`, and replace the `syndicate_signal`
+heuristic with a real cross-claim/network detector when you have one.
 
 ---
 

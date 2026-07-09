@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.core.dependencies import CurrentUserDep, DbSession, PaginationDep, client_ip
 from app.core.responses import paginated, success
+from app.schemas.claim import ClaimIngest
 from app.services.audit import AuditService
 from app.services.claims import ClaimService
 
@@ -41,6 +42,22 @@ async def list_claims(
 @router.get("/live-feed", summary="Most recent scored claims")
 async def live_feed(db: DbSession, limit: int = Query(5, ge=1, le=50)) -> dict:
     return success(await ClaimService(db).live_feed(limit), "Live feed")
+
+
+@router.post("/ingest", summary="Ingest and score a new claim (NH263)")
+async def ingest(
+    payload: ClaimIngest, db: DbSession, user: CurrentUserDep, request: Request
+) -> dict:
+    data = await ClaimService(db).ingest(payload, actor=user.id)
+    await AuditService(db).record(
+        action="claim.ingest",
+        entity_type="claim",
+        entity_id=data["claimRef"],
+        actor_id=user.id,
+        request_id=getattr(request.state, "request_id", None),
+        ip_address=client_ip(request),
+    )
+    return success(data, "Claim ingested")
 
 
 @router.get("/{claim_ref}", summary="Full claim detail", response_model=None)
