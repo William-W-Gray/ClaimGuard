@@ -170,7 +170,9 @@ export function MemberPortalPage() {
               <div className="px-5 py-4 border-b border-gray-100">
                 <h3>Claims History</h3>
               </div>
-              {claims.length === 0 ? (
+              {isLoading ? (
+                <div className="py-8 text-center text-sm text-gray-400">Loading claims…</div>
+              ) : claims.length === 0 ? (
                 <div className="py-8 text-center text-sm text-gray-400">No claims found for this member</div>
               ) : (
                 <div className="divide-y divide-gray-50">
