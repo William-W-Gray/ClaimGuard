@@ -43,6 +43,14 @@ class UserCreate(CamelModel):
     roles: list[str] = ["agent"]
 
 
+class UserUpdate(CamelModel):
+    """Partial update for an existing account (admin only)."""
+
+    full_name: str | None = Field(default=None, min_length=1)
+    roles: list[str] | None = None
+    is_active: bool | None = None
+
+
 class UserSummary(CamelModel):
     """Lightweight user for directory / assignment pickers."""
 
@@ -50,3 +58,4 @@ class UserSummary(CamelModel):
     full_name: str
     email: EmailStr
     roles: list[str] = []
+    is_active: bool = True

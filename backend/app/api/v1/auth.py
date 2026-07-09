@@ -1,10 +1,18 @@
 """Authentication endpoints."""
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.core.config import settings
-from app.core.dependencies import CurrentUserDep, DbSession, client_ip, require_roles
+from app.core.dependencies import (
+    CurrentUser,
+    CurrentUserDep,
+    DbSession,
+    client_ip,
+    require_roles,
+)
 from app.core.responses import success
 from app.repositories.user import UserRepository
 from app.schemas.auth import (
@@ -12,11 +20,25 @@ from app.schemas.auth import (
     RefreshRequest,
     UserCreate,
     UserOut,
+    UserSummary,
+    UserUpdate,
 )
 from app.services.audit import AuditService
 from app.services.auth import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+AdminDep = Annotated[CurrentUser, Depends(require_roles("admin"))]
+
+
+def _user_summary(user) -> dict:  # noqa: ANN001
+    return UserSummary(
+        id=str(user.id),
+        full_name=user.full_name,
+        email=user.email,
+        roles=user.role_names,
+        is_active=user.is_active,
+    ).model_dump(by_alias=True)
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -121,3 +143,23 @@ async def create_user(payload: UserCreate, db: DbSession) -> dict:
         role_names=payload.roles,
     )
     return success({"id": str(user.id), "email": user.email}, "User created")
+
+
+@router.patch("/users/{user_id}", summary="Update a user (admin only)")
+async def update_user(
+    user_id: str, payload: UserUpdate, admin: AdminDep, db: DbSession
+) -> dict:
+    user = await AuthService(db).update_user(
+        user_id,
+        actor_id=admin.id,
+        full_name=payload.full_name,
+        role_names=payload.roles,
+        is_active=payload.is_active,
+    )
+    return success(_user_summary(user), "User updated")
+
+
+@router.delete("/users/{user_id}", summary="Delete a user (admin only)")
+async def delete_user(user_id: str, admin: AdminDep, db: DbSession) -> dict:
+    await AuthService(db).delete_user(user_id, actor_id=admin.id)
+    return success(None, "User deleted")

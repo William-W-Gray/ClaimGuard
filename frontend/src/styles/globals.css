@@ -63,6 +63,13 @@
            focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2;
   }
 
+  /* Compact icon-only action button (table rows, toolbars) */
+  .icon-btn {
+    @apply inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-500
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed
+           focus:outline-none focus:ring-2 focus:ring-brand-navy/20;
+  }
+
   /* Table */
   .data-table {
     @apply w-full text-sm;
