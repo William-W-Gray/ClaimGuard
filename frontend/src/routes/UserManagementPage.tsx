@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchUsers, createUser, type NewUserInput } from '@/lib/api';
+import {
+  fetchUsers, createUser, updateUser, deleteUser,
+  type NewUserInput, type UserSummary, type UserUpdateInput,
+} from '@/lib/api';
 import { ApiError } from '@/lib/apiClient';
 import { AppShell } from '@/components/layout/AppShell';
 import { StatCard } from '@/components/shared/StatCard';
@@ -10,6 +13,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { cn } from '@/lib/utils';
 import {
   Users, UserPlus, ShieldCheck, ShieldAlert, Eye, EyeOff, RefreshCw, Check, X,
+  Pencil, Power, PowerOff, Trash2, Loader2,
 } from 'lucide-react';
 
 interface RoleMeta {
@@ -39,6 +43,102 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+function EditUserModal({
+  user, isSelf, isPending, error, onClose, onSave,
+}: {
+  user: UserSummary;
+  isSelf: boolean;
+  isPending: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSave: (changes: UserUpdateInput) => void;
+}) {
+  const [fullName, setFullName] = useState(user.fullName);
+  const [role, setRole] = useState(user.roles[0] ?? 'agent');
+
+  const nameChanged = fullName.trim() && fullName.trim() !== user.fullName;
+  const roleChanged = role !== (user.roles[0] ?? '');
+  const canSave = !!(nameChanged || roleChanged) && !!fullName.trim();
+
+  const submit = () => {
+    const changes: UserUpdateInput = {};
+    if (nameChanged) changes.fullName = fullName.trim();
+    if (roleChanged) changes.roles = [role];
+    onSave(changes);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog" aria-modal="true" aria-label={`Edit ${user.fullName}`}
+      onClick={onClose}
+    >
+      <div className="page-card w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3>Edit user</h3>
+          <button className="icon-btn hover:bg-gray-100" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <form className="p-5 space-y-4" onSubmit={(e) => { e.preventDefault(); if (canSave) submit(); }}>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
+          <div>
+            <label htmlFor="editName" className="block text-xs font-medium text-gray-600 mb-1">Full name</label>
+            <input
+              id="editName" className="form-input" value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+            />
+          </div>
+          <div>
+            <span className="block text-xs font-medium text-gray-600 mb-1.5">Role</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {ROLES.map((r) => {
+                const selected = role === r.value;
+                return (
+                  <button
+                    type="button" key={r.value} onClick={() => setRole(r.value)}
+                    className={cn(
+                      'flex items-start gap-2 text-left rounded-lg border px-3 py-2.5 transition-colors',
+                      selected ? 'border-brand-navy bg-brand-navy/5' : 'border-gray-200 hover:border-gray-300'
+                    )}
+                    aria-pressed={selected}
+                  >
+                    <span className={cn(
+                      'mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0',
+                      selected ? 'border-brand-navy bg-brand-navy' : 'border-gray-300'
+                    )}>
+                      {selected && <Check size={11} className="text-white" />}
+                    </span>
+                    <span className="min-w-0">
+                      <RoleBadge role={r.value} />
+                      <span className="block text-xs text-gray-500 mt-1">{r.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {isSelf && role !== 'admin' && (
+              <p className="text-xs text-amber-600 mt-1.5">
+                You can't remove your own admin role — assign it to someone else first.
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <button type="submit" className="btn-primary" disabled={!canSave || isPending}>
+              {isPending ? 'Saving…' : <><Check size={16} /> Save changes</>}
+            </button>
+            <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function randomPassword(): string {
   const sets = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
   const arr = crypto.getRandomValues(new Uint32Array(14));
@@ -56,12 +156,19 @@ export function UserManagementPage() {
   const [form, setForm] = useState<NewUserInput>(EMPTY);
   const [showPassword, setShowPassword] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  const [editing, setEditing] = useState<UserSummary | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
 
+  // Admins manage the full roster, including deactivated accounts.
   const { data: users = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ['users'],
-    queryFn: fetchUsers,
+    queryKey: ['users', 'all'],
+    queryFn: () => fetchUsers(true),
     enabled: isAdmin,
   });
+
+  const rowErrorFrom = (err: unknown) =>
+    err instanceof ApiError ? err.message : 'Something went wrong. Please try again.';
 
   const createMutation = useMutation({
     mutationFn: (input: NewUserInput) => createUser(input),
@@ -73,6 +180,35 @@ export function UserManagementPage() {
       setShowForm(false);
     },
   });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, changes }: { id: string; changes: UserUpdateInput }) =>
+      updateUser(id, changes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setEditing(null);
+      setRowError(null);
+    },
+    onError: (err) => setRowError(rowErrorFrom(err)),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteUser(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setConfirmDeleteId(null);
+      setRowError(null);
+    },
+    onError: (err) => {
+      setRowError(rowErrorFrom(err));
+      setConfirmDeleteId(null);
+    },
+  });
+
+  const busyId =
+    (updateMutation.isPending && (updateMutation.variables?.id ?? null)) ||
+    (deleteMutation.isPending && (deleteMutation.variables ?? null)) ||
+    null;
 
   const errorMessage =
     createMutation.error instanceof ApiError
@@ -246,46 +382,127 @@ export function UserManagementPage() {
 
           {/* Users table */}
           {!showForm && (
-            <div className="overflow-x-auto">
-              <table className="data-table" aria-label="User accounts">
-                <thead>
-                  <tr>
-                    <th>User</th>
-                    <th>Email</th>
-                    <th>Role</th>
-                  </tr>
-                </thead>
-                {isLoading ? (
-                  <SkeletonTableBody rows={4} />
-                ) : (
-                  <tbody>
-                    {users.map((u) => (
-                      <tr key={u.id} className="!cursor-default">
-                        <td>
-                          <div className="flex items-center gap-2.5">
-                            <span className="w-8 h-8 rounded-full bg-brand-navy/10 text-brand-navy flex items-center justify-center text-xs font-bold flex-shrink-0">
-                              {u.fullName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
-                            </span>
-                            <span className="font-medium text-gray-800">
-                              {u.fullName}
-                              {u.id === currentUser?.id && (
-                                <span className="ml-2 text-[10px] font-semibold text-gray-400 uppercase">You</span>
+            <div>
+              {rowError && (
+                <div className="mx-5 mt-4 flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">
+                  <ShieldAlert size={15} className="mt-0.5 flex-shrink-0" />
+                  <span className="flex-1">{rowError}</span>
+                  <button onClick={() => setRowError(null)} aria-label="Dismiss" className="text-red-500 hover:text-red-700">
+                    <X size={15} />
+                  </button>
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="data-table" aria-label="User accounts">
+                  <thead>
+                    <tr>
+                      <th>User</th>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Status</th>
+                      <th className="text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  {isLoading ? (
+                    <SkeletonTableBody rows={4} />
+                  ) : (
+                    <tbody>
+                      {users.map((u) => {
+                        const isSelf = u.id === currentUser?.id;
+                        const rowBusy = busyId === u.id;
+                        const confirming = confirmDeleteId === u.id;
+                        return (
+                          <tr key={u.id} className={cn('!cursor-default', !u.isActive && 'opacity-60')}>
+                            <td>
+                              <div className="flex items-center gap-2.5">
+                                <span className={cn(
+                                  'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0',
+                                  u.isActive ? 'bg-brand-navy/10 text-brand-navy' : 'bg-gray-100 text-gray-400'
+                                )}>
+                                  {u.fullName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                                </span>
+                                <span className="font-medium text-gray-800">
+                                  {u.fullName}
+                                  {isSelf && (
+                                    <span className="ml-2 text-[10px] font-semibold text-gray-400 uppercase">You</span>
+                                  )}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="text-gray-600">{u.email}</td>
+                            <td>
+                              <div className="flex flex-wrap gap-1">
+                                {u.roles.length ? u.roles.map((r) => <RoleBadge key={r} role={r} />)
+                                  : <span className="text-xs text-gray-400">—</span>}
+                              </div>
+                            </td>
+                            <td>
+                              {u.isActive ? (
+                                <span className="badge bg-green-50 text-green-700 border-green-200">Active</span>
+                              ) : (
+                                <span className="badge bg-gray-100 text-gray-500 border-gray-200">Inactive</span>
                               )}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="text-gray-600">{u.email}</td>
-                        <td>
-                          <div className="flex flex-wrap gap-1">
-                            {u.roles.length ? u.roles.map((r) => <RoleBadge key={r} role={r} />)
-                              : <span className="text-xs text-gray-400">—</span>}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                )}
-              </table>
+                            </td>
+                            <td>
+                              {confirming ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="text-xs text-gray-500">Delete permanently?</span>
+                                  <button
+                                    className="icon-btn text-red-600 hover:bg-red-50"
+                                    onClick={() => deleteMutation.mutate(u.id)}
+                                    disabled={rowBusy} aria-label="Confirm delete" title="Confirm delete"
+                                  >
+                                    {rowBusy ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                                  </button>
+                                  <button
+                                    className="icon-btn text-gray-500 hover:bg-gray-100"
+                                    onClick={() => setConfirmDeleteId(null)}
+                                    disabled={rowBusy} aria-label="Cancel delete" title="Cancel"
+                                  >
+                                    <X size={16} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    className="icon-btn text-gray-500 hover:bg-gray-100 hover:text-brand-navy"
+                                    onClick={() => { setRowError(null); setEditing(u); }}
+                                    disabled={rowBusy} aria-label={`Edit ${u.fullName}`} title="Edit name & role"
+                                  >
+                                    <Pencil size={15} />
+                                  </button>
+                                  {!isSelf && (
+                                    <button
+                                      className={cn('icon-btn hover:bg-gray-100',
+                                        u.isActive ? 'text-amber-600 hover:text-amber-700' : 'text-green-600 hover:text-green-700')}
+                                      onClick={() => { setRowError(null); updateMutation.mutate({ id: u.id, changes: { isActive: !u.isActive } }); }}
+                                      disabled={rowBusy}
+                                      aria-label={u.isActive ? `Deactivate ${u.fullName}` : `Activate ${u.fullName}`}
+                                      title={u.isActive ? 'Deactivate account' : 'Reactivate account'}
+                                    >
+                                      {rowBusy ? <Loader2 size={15} className="animate-spin" />
+                                        : u.isActive ? <PowerOff size={15} /> : <Power size={15} />}
+                                    </button>
+                                  )}
+                                  {!isSelf && (
+                                    <button
+                                      className="icon-btn text-gray-400 hover:bg-red-50 hover:text-red-600"
+                                      onClick={() => { setRowError(null); setConfirmDeleteId(u.id); }}
+                                      disabled={rowBusy} aria-label={`Delete ${u.fullName}`} title="Delete account"
+                                    >
+                                      <Trash2 size={15} />
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  )}
+                </table>
+              </div>
               {!isLoading && users.length === 0 && (
                 <div className="p-6">
                   <EmptyState title="No users yet" description="Create the first account to get started." />
@@ -299,6 +516,20 @@ export function UserManagementPage() {
           <ErrorState onRetry={() => refetch()} />
         )}
       </div>
+
+      {editing && (
+        <EditUserModal
+          user={editing}
+          isSelf={editing.id === currentUser?.id}
+          isPending={updateMutation.isPending}
+          error={updateMutation.isPending ? null : rowError}
+          onClose={() => { setEditing(null); setRowError(null); }}
+          onSave={(changes) => {
+            if (Object.keys(changes).length === 0) { setEditing(null); return; }
+            updateMutation.mutate({ id: editing.id, changes });
+          }}
+        />
+      )}
     </AppShell>
   );
 }

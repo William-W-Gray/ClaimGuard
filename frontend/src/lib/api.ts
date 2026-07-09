@@ -44,10 +44,13 @@ export interface UserSummary {
   fullName: string;
   email: string;
   roles: string[];
+  isActive: boolean;
 }
 
-export async function fetchUsers(): Promise<UserSummary[]> {
-  return api.get<UserSummary[]>('/users');
+export async function fetchUsers(includeInactive = false): Promise<UserSummary[]> {
+  return api.get<UserSummary[]>('/users', {
+    params: includeInactive ? { include_inactive: true } : undefined,
+  });
 }
 
 export interface NewUserInput {
@@ -59,6 +62,20 @@ export interface NewUserInput {
 
 export async function createUser(input: NewUserInput): Promise<{ id: string; email: string }> {
   return api.post<{ id: string; email: string }>('/auth/users', input);
+}
+
+export interface UserUpdateInput {
+  fullName?: string;
+  roles?: string[];
+  isActive?: boolean;
+}
+
+export async function updateUser(id: string, changes: UserUpdateInput): Promise<UserSummary> {
+  return api.patch<UserSummary>(`/auth/users/${encodeURIComponent(id)}`, changes);
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await api.del(`/auth/users/${encodeURIComponent(id)}`);
 }
 
 export async function logoutRequest(): Promise<void> {

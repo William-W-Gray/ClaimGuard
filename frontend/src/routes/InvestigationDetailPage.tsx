@@ -31,7 +31,7 @@ export function InvestigationDetailPage() {
     queryFn: () => fetchInvestigation(investigationId),
   });
 
-  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: fetchUsers });
+  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => fetchUsers() });
 
   const [status, setStatus] = useState('OPEN');
   const [priority, setPriority] = useState('MEDIUM');

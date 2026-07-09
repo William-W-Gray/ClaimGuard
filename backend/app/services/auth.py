@@ -8,7 +8,14 @@ import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import AuthenticationError, ConflictError, RateLimitError
+from app.core.exceptions import (
+    AuthenticationError,
+    BusinessRuleError,
+    ConflictError,
+    NotFoundError,
+    RateLimitError,
+    ValidationError,
+)
 from app.core.redis import redis_client
 from app.core.security import (
     create_access_token,
@@ -133,3 +140,74 @@ class AuthService:
         )
         user.roles = roles
         return await self.users.add(user)
+
+    async def _resolve_roles(self, role_names: list[str]) -> list:
+        if not role_names:
+            raise ValidationError("A user must have at least one role")
+        roles = await self.roles.get_many_by_name(role_names)
+        missing = set(role_names) - {r.name for r in roles}
+        if missing:
+            raise ValidationError(f"Unknown role(s): {', '.join(sorted(missing))}")
+        return roles
+
+    async def update_user(
+        self,
+        user_id: str,
+        *,
+        actor_id: str,
+        full_name: str | None = None,
+        role_names: list[str] | None = None,
+        is_active: bool | None = None,
+    ) -> User:
+        """Edit / (de)activate a user, guarding against admin lock-out."""
+        user = await self.users.get(user_id)
+        if not user:
+            raise NotFoundError("User not found")
+
+        is_self = str(user.id) == str(actor_id)
+        currently_active_admin = user.is_active and "admin" in user.role_names
+        resulting_active = user.is_active if is_active is None else bool(is_active)
+        resulting_roles = user.role_names if role_names is None else role_names
+        resulting_active_admin = resulting_active and "admin" in resulting_roles
+
+        if is_self and is_active is False:
+            raise BusinessRuleError("You cannot deactivate your own account")
+        if is_self and role_names is not None and "admin" not in resulting_roles:
+            raise BusinessRuleError("You cannot remove your own admin role")
+        if (
+            currently_active_admin
+            and not resulting_active_admin
+            and await self.users.count_active_admins(exclude_id=user.id) == 0
+        ):
+            raise BusinessRuleError("At least one active administrator is required")
+
+        roles = await self._resolve_roles(role_names) if role_names is not None else None
+
+        if full_name is not None:
+            trimmed = full_name.strip()
+            if trimmed:
+                user.full_name = trimmed
+        if is_active is not None:
+            user.is_active = bool(is_active)
+        await self.session.flush()
+        if roles is not None:
+            await self.users.set_roles(user, roles)
+            # Reload the collection in-context; the Core writes above bypass the ORM,
+            # leaving user.roles stale. refresh() loads eagerly under the awaited call.
+            await self.session.refresh(user, attribute_names=["roles"])
+        return user
+
+    async def delete_user(self, user_id: str, *, actor_id: str) -> None:
+        """Permanently delete a user, guarding self-deletion and last-admin."""
+        user = await self.users.get(user_id)
+        if not user:
+            raise NotFoundError("User not found")
+        if str(user.id) == str(actor_id):
+            raise BusinessRuleError("You cannot delete your own account")
+        if (
+            user.is_active
+            and "admin" in user.role_names
+            and await self.users.count_active_admins(exclude_id=user.id) == 0
+        ):
+            raise BusinessRuleError("At least one active administrator is required")
+        await self.users.hard_delete_user(user)
