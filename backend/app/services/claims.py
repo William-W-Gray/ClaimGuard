@@ -1,6 +1,7 @@
 """Claims application service — queue, detail, lifecycle actions, scoring."""
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -16,13 +17,29 @@ from app.repositories.claim import ClaimRepository
 from app.repositories.member import MemberRepository
 from app.repositories.provider import ProviderRepository
 from app.schemas.claim import ClaimIngest, claim_to_detail, claim_to_summary
-from app.services.notifications import NotificationService
+from app.services.notifications import CHANNELS, NotificationService
 
 # Hours until an un-actioned claim auto-approves / breaches SLA.
 _AUTO_APPROVE_HOURS = 72
 _SLA_HOURS = 48
 
 _REJECT_REASONS = {"REJECT_FRAUD", "REJECT_ERROR"}
+
+# MemberGuard: channels a member can be alerted on, and the responses they can give.
+_MEMBER_CHANNELS = {"SMS", "WHATSAPP", "USSD"}
+_MEMBER_RESPONSES = {"CONFIRMED", "DISPUTED"}
+
+
+def _compose_member_alert(claim: Claim) -> str:
+    """The verification message a member receives for a flagged claim."""
+    amount = f"US${float(claim.claimed_amount):,.2f}"
+    provider = claim.provider.name
+    service = claim.service_date or "recently"
+    return (
+        f"CIMAS ClaimGuard: a claim for {amount} at {provider} (service date "
+        f"{service}) was submitted in your name. Did you receive this service? "
+        f"Reply YES if correct, NO if not — your reply protects your benefits."
+    )
 
 
 class ClaimService:
@@ -120,6 +137,100 @@ class ClaimService:
         claim.agent_notes = note
         await self._add_timeline(claim, "Note added", note, actor)
         await self.session.flush()
+        return claim_to_detail(claim)
+
+    # ── MemberGuard: instant alerts & member confirmation ───────────────────────
+    async def send_member_alert(self, claim_ref: str, channel: str, actor: str) -> dict:
+        """Send a member a verification alert for a claim and reset their response.
+
+        Best-effort dispatch through the configured channel adapter (real for
+        WhatsApp when credentials are set, log-only otherwise), and returns the
+        composed message so the UI can render the alert exactly as sent.
+        """
+        channel = (channel or "").upper()
+        if channel not in _MEMBER_CHANNELS:
+            raise BusinessRuleError(f"Unsupported alert channel: {channel or '(none)'}")
+        claim = await self.repo.get_by_ref(claim_ref)
+        if not claim:
+            raise NotFoundError(f"Claim {claim_ref} not found")
+
+        message = _compose_member_alert(claim)
+        claim.member_notification_sent = True
+        claim.member_notification_channel = channel
+        claim.member_response = "PENDING"
+        claim.updated_by = actor
+
+        delivered = False
+        adapter = CHANNELS.get(channel)
+        if adapter is not None:
+            with contextlib.suppress(Exception):
+                delivered = await adapter.send(
+                    claim.member.phone, "Claim verification", message
+                )
+
+        await self._add_timeline(
+            claim,
+            "Member alert sent",
+            f"{channel} verification alert sent to {claim.member.name} "
+            f"({claim.member.phone})",
+            actor,
+            type_="system",
+        )
+        await self.session.flush()
+        publish(WSEventType.QUEUE_UPDATED, {"claimRef": claim_ref})
+        return {
+            "claim": claim_to_detail(claim),
+            "alert": {
+                "channel": channel,
+                "to": claim.member.phone,
+                "memberName": claim.member.name,
+                "message": message,
+                "delivered": delivered,
+            },
+        }
+
+    async def record_member_response(
+        self, claim_ref: str, response: str, actor: str = "member"
+    ) -> dict:
+        """Record a member's confirm/dispute reply; a dispute escalates the claim."""
+        response = (response or "").upper()
+        if response not in _MEMBER_RESPONSES:
+            raise BusinessRuleError(f"Invalid member response: {response or '(none)'}")
+        claim = await self.repo.get_by_ref(claim_ref)
+        if not claim:
+            raise NotFoundError(f"Claim {claim_ref} not found")
+        if not claim.member_notification_sent:
+            raise BusinessRuleError("No verification alert has been sent for this claim")
+
+        claim.member_response = response
+        if response == "DISPUTED":
+            # The member says they never received the service — strongest possible
+            # fraud signal: escalate to the top of the queue and flag it.
+            claim.priority = "CRITICAL"
+            claim.flags.append(
+                ClaimFlag(
+                    claim_id=claim.id,
+                    code="MEMBER_DISPUTED",
+                    severity="CRITICAL",
+                    detail="Member reported they did not receive this service",
+                )
+            )
+
+        verb = "confirmed" if response == "CONFIRMED" else "disputed"
+        via = claim.member_notification_channel or "alert"
+        await self._add_timeline(
+            claim,
+            f"Member {verb} claim",
+            f"Member {verb} the service via {via}",
+            actor,
+            type_="member",
+        )
+        await self.session.flush()
+        publish(
+            WSEventType.QUEUE_UPDATED,
+            {"claimRef": claim_ref, "memberResponse": response},
+        )
+        publish(WSEventType.DASHBOARD_UPDATED, {"reason": "member_response"})
         return claim_to_detail(claim)
 
     # ── Ingestion ──────────────────────────────────────────────────────────────

@@ -21,6 +21,14 @@ class NotePayload(BaseModel):
     note: str
 
 
+class MemberAlertPayload(BaseModel):
+    channel: str = "WHATSAPP"  # SMS | WHATSAPP | USSD
+
+
+class MemberResponsePayload(BaseModel):
+    response: str  # CONFIRMED | DISPUTED
+
+
 @router.get("", summary="Paginated investigation queue", response_model=None)
 async def list_claims(
     db: DbSession,
@@ -116,6 +124,24 @@ async def add_note(
         await ClaimService(db).add_note(claim_ref, payload.note, actor=user.id),
         "Note added",
     )
+
+
+@router.post("/{claim_ref}/member-alert", summary="Send a MemberGuard verification alert")
+async def member_alert(
+    claim_ref: str, payload: MemberAlertPayload, db: DbSession, user: CurrentUserDep
+) -> dict:
+    result = await ClaimService(db).send_member_alert(
+        claim_ref, payload.channel, actor=user.id
+    )
+    return success(result, "Alert sent")
+
+
+@router.post("/{claim_ref}/member-response", summary="Record a member's confirmation reply")
+async def member_response(
+    claim_ref: str, payload: MemberResponsePayload, db: DbSession, _: CurrentUserDep
+) -> dict:
+    data = await ClaimService(db).record_member_response(claim_ref, payload.response)
+    return success(data, "Response recorded")
 
 
 @router.post("/{claim_ref}/rescore", summary="Re-run FraudShield scoring")
