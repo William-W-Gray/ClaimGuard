@@ -14,6 +14,7 @@ import { InvestigationDetailPage } from '@/routes/InvestigationDetailPage';
 import { TrustScorePage } from '@/routes/TrustScorePage';
 import { ProviderDetailPage } from '@/routes/ProviderDetailPage';
 import { MemberPortalPage } from '@/routes/MemberPortalPage';
+import { MemberGuardPage } from '@/routes/MemberGuardPage';
 import { DemoControlPage } from '@/routes/DemoControlPage';
 import { ROICalculatorPage } from '@/routes/ROICalculatorPage';
 import { USSDSimulatorPage } from '@/routes/USSDSimulatorPage';
@@ -92,6 +93,12 @@ const membersRoute = createRoute({
   component: MemberPortalPage,
 });
 
+const memberGuardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/memberguard',
+  component: MemberGuardPage,
+});
+
 // ─── Demo ─────────────────────────────────────────────────────────────────────
 
 const demoRoute = createRoute({
@@ -136,6 +143,7 @@ const routeTree = rootRoute.addChildren([
   trustScoreRoute,
   providerDetailRoute,
   membersRoute,
+  memberGuardRoute,
   demoRoute,
   roiRoute,
   ussdRoute,

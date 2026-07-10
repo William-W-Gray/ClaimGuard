@@ -246,6 +246,41 @@ export async function rejectClaim(
   return api.post<Claim>(`/claims/${encodeURIComponent(claimRef)}/reject`, { reason });
 }
 
+// ─── MemberGuard (instant alerts + confirmation) ─────────────────────────────────
+
+export interface MemberAlert {
+  channel: 'SMS' | 'WHATSAPP' | 'USSD';
+  to: string;
+  memberName: string;
+  message: string;
+  delivered: boolean;
+}
+
+export interface MemberAlertResult {
+  claim: Claim;
+  alert: MemberAlert;
+}
+
+export async function sendMemberAlert(
+  claimRef: string,
+  channel: 'SMS' | 'WHATSAPP' | 'USSD',
+): Promise<MemberAlertResult> {
+  return api.post<MemberAlertResult>(
+    `/claims/${encodeURIComponent(claimRef)}/member-alert`,
+    { channel },
+  );
+}
+
+export async function recordMemberResponse(
+  claimRef: string,
+  response: 'CONFIRMED' | 'DISPUTED',
+): Promise<Claim> {
+  return api.post<Claim>(
+    `/claims/${encodeURIComponent(claimRef)}/member-response`,
+    { response },
+  );
+}
+
 // ─── Providers / TrustScore ─────────────────────────────────────────────────────
 
 export async function fetchProviders(): Promise<Provider[]> {

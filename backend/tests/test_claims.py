@@ -84,6 +84,73 @@ async def test_rescore_preserves_persisted_signals(client: AsyncClient, auth_hea
     assert detail["riskLevel"] in {"HIGH", "CRITICAL"}
 
 
+# ─── MemberGuard: alerts & confirmation ─────────────────────────────────────────
+async def test_member_alert_and_confirm(client: AsyncClient, auth_headers: dict):
+    # A response before any alert has been sent is rejected (CG-00882 is seeded
+    # with member_notification_sent=False, so this runs before its alert below).
+    premature = await client.post(
+        "/api/v1/claims/CG-00882/member-response",
+        headers=auth_headers,
+        json={"response": "CONFIRMED"},
+    )
+    assert premature.status_code == 422
+
+    alert = await client.post(
+        "/api/v1/claims/CG-00882/member-alert",
+        headers=auth_headers,
+        json={"channel": "WHATSAPP"},
+    )
+    assert alert.status_code == 200, alert.text
+    data = alert.json()["data"]
+    assert data["alert"]["channel"] == "WHATSAPP"
+    assert "did you receive this service" in data["alert"]["message"].lower()
+    assert data["claim"]["memberNotificationSent"] is True
+    assert data["claim"]["memberNotificationChannel"] == "WHATSAPP"
+    assert data["claim"]["memberResponse"] == "PENDING"
+
+    confirm = await client.post(
+        "/api/v1/claims/CG-00882/member-response",
+        headers=auth_headers,
+        json={"response": "CONFIRMED"},
+    )
+    assert confirm.status_code == 200, confirm.text
+    assert confirm.json()["data"]["memberResponse"] == "CONFIRMED"
+
+
+async def test_member_dispute_escalates_claim(client: AsyncClient, auth_headers: dict):
+    await client.post(
+        "/api/v1/claims/CG-00088/member-alert",
+        headers=auth_headers,
+        json={"channel": "SMS"},
+    )
+    disputed = await client.post(
+        "/api/v1/claims/CG-00088/member-response",
+        headers=auth_headers,
+        json={"response": "DISPUTED"},
+    )
+    assert disputed.status_code == 200, disputed.text
+    data = disputed.json()["data"]
+    assert data["memberResponse"] == "DISPUTED"
+    assert data["priority"] == "CRITICAL"
+    assert "MEMBER_DISPUTED" in data["flags"]
+
+
+async def test_member_alert_rejects_unknown_channel(client: AsyncClient, auth_headers: dict):
+    resp = await client.post(
+        "/api/v1/claims/CG-00291/member-alert",
+        headers=auth_headers,
+        json={"channel": "CARRIER_PIGEON"},
+    )
+    assert resp.status_code == 422
+
+
+async def test_member_alert_requires_auth(client: AsyncClient):
+    resp = await client.post(
+        "/api/v1/claims/CG-00291/member-alert", json={"channel": "SMS"}
+    )
+    assert resp.status_code == 401
+
+
 async def test_fraudshield_score_endpoint(client: AsyncClient, auth_headers: dict):
     resp = await client.post(
         "/api/v1/fraudshield/score",
