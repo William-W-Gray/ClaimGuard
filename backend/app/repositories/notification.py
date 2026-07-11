@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select, update
 
 from app.models.audit import AuditLog
 from app.models.notification import Notification
+from app.models.user import User
 from app.repositories.base import BaseRepository
 
 
@@ -77,3 +78,84 @@ class AuditRepository(BaseRepository[AuditLog]):
     async def recent(self, limit: int = 50) -> list[AuditLog]:
         stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
         return list((await self.session.execute(stmt)).scalars().all())
+
+    def _filtered(
+        self,
+        base,  # noqa: ANN001
+        *,
+        query: str | None,
+        action: str | None,
+        entity_type: str | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+    ):
+        """Apply the shared audit filters. Person search matches the acting user's
+        name/email (via an outer join) or the recorded actor_email."""
+        stmt = base.outerjoin(User, AuditLog.actor_id == User.id)
+        if query:
+            like = f"%{query.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    User.full_name.ilike(like),
+                    User.email.ilike(like),
+                    AuditLog.actor_email.ilike(like),
+                )
+            )
+        if action:
+            stmt = stmt.where(AuditLog.action == action)
+        if entity_type:
+            stmt = stmt.where(AuditLog.entity_type == entity_type)
+        if date_from:
+            stmt = stmt.where(AuditLog.created_at >= date_from)
+        if date_to:
+            stmt = stmt.where(AuditLog.created_at <= date_to)
+        return stmt
+
+    async def search(
+        self,
+        *,
+        query: str | None = None,
+        action: str | None = None,
+        entity_type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[AuditLog], int]:
+        filters = {
+            "query": query,
+            "action": action,
+            "entity_type": entity_type,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+        total = (
+            await self.session.execute(
+                self._filtered(select(func.count(AuditLog.id)), **filters)
+            )
+        ).scalar_one()
+        rows = (
+            await self.session.execute(
+                self._filtered(select(AuditLog), **filters)
+                .order_by(AuditLog.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).scalars().all()
+        return list(rows), int(total)
+
+    async def distinct_filters(self) -> dict[str, list[str]]:
+        """The distinct action and entity_type values present, for filter menus.
+        Keys are camelCase to match the frontend contract (this is a raw dict, so
+        the response envelope does not alias it)."""
+        actions = (
+            await self.session.execute(
+                select(AuditLog.action).distinct().order_by(AuditLog.action)
+            )
+        ).scalars().all()
+        entities = (
+            await self.session.execute(
+                select(AuditLog.entity_type).distinct().order_by(AuditLog.entity_type)
+            )
+        ).scalars().all()
+        return {"actions": list(actions), "entityTypes": list(entities)}

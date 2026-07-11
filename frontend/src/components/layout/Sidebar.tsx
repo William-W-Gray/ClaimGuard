@@ -2,7 +2,7 @@ import { Link, useLocation } from '@tanstack/react-router';
 import {
   LayoutDashboard, ListFilter, ShieldCheck, Users, Hash,
   PlayCircle, Calculator, ChevronLeft, ChevronRight, Activity, FolderSearch, UserCog,
-  BellRing,
+  BellRing, ScrollText,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -17,6 +17,8 @@ interface NavItem {
   icon: LucideIcon;
   highlight?: boolean;
   adminOnly?: boolean;
+  // Visible only to users holding one of these roles (admins always see it).
+  roles?: string[];
 }
 
 // The demo scenario runner only exists on the backend when DEMO_MODE is on, so
@@ -33,6 +35,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/ussd', label: 'USSD Service', icon: Hash },
   { to: '/roi', label: 'ROI Calculator', icon: Calculator },
   { to: '/team', label: 'User Management', icon: UserCog, adminOnly: true },
+  { to: '/audit', label: 'Audit Trail', icon: ScrollText, roles: ['admin', 'auditor'] },
   ...(IS_DEMO
     ? [{ to: '/demo', label: 'Demo Control Panel', icon: PlayCircle, highlight: true }]
     : []),
@@ -44,7 +47,11 @@ export function Sidebar() {
   const location = useLocation();
   const user = useAuthStore((s) => s.user);
   const isAdmin = !!user && (user.roles.includes('admin') || user.isSuperuser);
-  const navItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
+  const navItems = NAV_ITEMS.filter((item) => {
+    if (item.adminOnly && !isAdmin) return false;
+    if (item.roles && !isAdmin && !item.roles.some((r) => user?.roles.includes(r))) return false;
+    return true;
+  });
 
   return (
     <aside

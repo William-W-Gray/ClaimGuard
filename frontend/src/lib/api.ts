@@ -83,6 +83,70 @@ export async function logoutRequest(): Promise<void> {
   await api.post('/auth/logout', {});
 }
 
+// ─── Audit trail ────────────────────────────────────────────────────────────────
+
+export interface AuditEntry {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  actorId: string | null;
+  actorName: string | null;
+  actorEmail: string | null;
+  ipAddress: string | null;
+  changes: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface PageInfo {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
+export interface AuditQuery {
+  search?: string;
+  action?: string;
+  entityType?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AuditResult {
+  items: AuditEntry[];
+  pagination: PageInfo;
+}
+
+export async function fetchAuditLog(q: AuditQuery = {}): Promise<AuditResult> {
+  const env = await api.getEnvelope<AuditEntry[]>('/audit', {
+    params: {
+      page: q.page ?? 1,
+      page_size: q.pageSize ?? 25,
+      search: q.search || undefined,
+      action: q.action || undefined,
+      entity_type: q.entityType || undefined,
+    },
+  });
+  const meta = env.metadata as { pagination?: PageInfo };
+  const pagination = meta?.pagination ?? {
+    page: 1, pageSize: 25, totalItems: env.data?.length ?? 0,
+    totalPages: 1, hasNext: false, hasPrev: false,
+  };
+  return { items: env.data ?? [], pagination };
+}
+
+export interface AuditFilters {
+  actions: string[];
+  entityTypes: string[];
+}
+
+export async function fetchAuditFilters(): Promise<AuditFilters> {
+  return api.get<AuditFilters>('/audit/filters');
+}
+
 // ─── Notifications ────────────────────────────────────────────────────────────
 
 export interface NotificationItem {

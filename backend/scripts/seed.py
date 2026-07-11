@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ from app.core.database import SessionFactory, engine
 from app.core.logging import configure_logging, get_logger
 from app.core.security import hash_password
 from app.models import Base
+from app.models.audit import AuditLog
 from app.models.claim import Claim, ClaimFlag, ClaimItem, ShapContribution, TimelineEvent
 from app.models.member import Member
 from app.models.notification import Notification
@@ -91,6 +92,7 @@ TEAM = [
     ("Rudo Chidziva", "rudo.chidziva@claimguard.co.zw", "analyst"),
     ("Farai Nyathi", "farai.nyathi@claimguard.co.zw", "agent"),
     ("Chipo Marufu", "chipo.marufu@claimguard.co.zw", "agent"),
+    ("Tapiwa Sithole", "tapiwa.sithole@claimguard.co.zw", "auditor"),
 ]
 
 
@@ -290,6 +292,68 @@ async def seed_notifications(session) -> None:
     log.info("seed.notifications", count=len(seeds))
 
 
+async def seed_audit(session) -> None:
+    """A representative slice of the who-did-what-when trail so the Audit page is
+    populated on first load. Real usage appends to this organically."""
+    admin_email = settings.first_admin_email.lower()
+    people = {
+        "admin": (det_id(f"user:{admin_email}"), "ClaimGuard Admin", admin_email),
+        "analyst": (
+            det_id("user:rudo.chidziva@claimguard.co.zw"),
+            "Rudo Chidziva",
+            "rudo.chidziva@claimguard.co.zw",
+        ),
+        "agent": (
+            det_id("user:farai.nyathi@claimguard.co.zw"),
+            "Farai Nyathi",
+            "farai.nyathi@claimguard.co.zw",
+        ),
+        "auditor": (
+            det_id("user:tapiwa.sithole@claimguard.co.zw"),
+            "Tapiwa Sithole",
+            "tapiwa.sithole@claimguard.co.zw",
+        ),
+    }
+    now = datetime.now(UTC)
+    # (key, who, action, entity_type, entity_id, minutes_ago, changes)
+    events = [
+        ("aud:1", "admin", "auth.login", "user", None, 240, {}),
+        ("aud:2", "agent", "claim.view", "claim", "CG-00291", 232, {}),
+        ("aud:3", "agent", "claim.reject", "claim", "CG-00291", 228,
+         {"reason": "REJECT_FRAUD"}),
+        ("aud:4", "analyst", "auth.login", "user", None, 180, {}),
+        ("aud:5", "analyst", "claim.view", "claim", "CG-00441", 176, {}),
+        ("aud:6", "analyst", "claim.approve", "claim", "CG-00441", 174, {}),
+        ("aud:7", "auditor", "auth.login", "user", None, 90, {}),
+        ("aud:8", "auditor", "claim.view", "claim", "CG-00112", 86, {}),
+        ("aud:9", "admin", "user.create", "user", None, 45,
+         {"email": "tapiwa.sithole@claimguard.co.zw", "roles": ["auditor"]}),
+        ("aud:10", "agent", "claim.view", "claim", "CG-00088", 12, {}),
+    ]
+    for key, who, action, etype, eid, mins, changes in events:
+        aid = det_id(key)
+        if await session.get(AuditLog, aid):
+            continue
+        actor_id, _name, actor_email = people[who]
+        # Login rows historically carried only the email (no actor_id), mirroring
+        # the auth flow; everything else records the acting user's id.
+        session.add(
+            AuditLog(
+                id=aid,
+                actor_id=None if action == "auth.login" else actor_id,
+                actor_email=actor_email if action == "auth.login" else None,
+                action=action,
+                entity_type=etype,
+                entity_id=eid,
+                ip_address="102.32.44.10",
+                changes=changes,
+                created_at=now - timedelta(minutes=mins),
+            )
+        )
+    await session.flush()
+    log.info("seed.audit", count=len(events))
+
+
 async def main(create_tables: bool = False) -> None:
     configure_logging()
     log.info("seed.start", db=settings.database_url.split("@")[-1], demo=settings.demo_mode)
@@ -308,6 +372,7 @@ async def main(create_tables: bool = False) -> None:
             await seed_providers(session)
             await seed_claims(session)
             await seed_notifications(session)
+            await seed_audit(session)
         await session.commit()
     await engine.dispose()
     log.info("seed.done", demo=settings.demo_mode)
