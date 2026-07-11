@@ -10,30 +10,37 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import DbSession, PaginationDep, require_roles
+from app.core.exceptions import NotFoundError
 from app.core.responses import paginated, success
 from app.models.audit import AuditLog
 from app.repositories.notification import AuditRepository
-from app.schemas.audit import AuditOut
+from app.schemas.audit import AuditDetailOut, AuditOut
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
 _audit_access = Depends(require_roles("admin", "auditor"))
 
 
-def _to_out(entry: AuditLog) -> dict:
-    actor_name = entry.actor.full_name if entry.actor else None
+def _audit_out(entry: AuditLog) -> AuditOut:
+    actor = entry.actor
     return AuditOut(
         id=str(entry.id),
         action=entry.action,
         entity_type=entry.entity_type,
         entity_id=entry.entity_id,
         actor_id=str(entry.actor_id) if entry.actor_id else None,
-        actor_name=actor_name,
-        actor_email=entry.actor_email,
+        actor_name=actor.full_name if actor else None,
+        actor_email=entry.actor_email or (actor.email if actor else None),
+        actor_roles=actor.role_names if actor else [],
+        request_id=entry.request_id,
         ip_address=entry.ip_address,
         changes=entry.changes or {},
         created_at=entry.created_at,
-    ).model_dump(by_alias=True)
+    )
+
+
+def _to_out(entry: AuditLog) -> dict:
+    return _audit_out(entry).model_dump(by_alias=True)
 
 
 @router.get(
@@ -70,3 +77,25 @@ async def list_audit(
 )
 async def audit_filters(db: DbSession) -> dict:
     return success(await AuditRepository(db).distinct_filters(), "Audit filters")
+
+
+@router.get(
+    "/{audit_id}",
+    summary="Full detail for one audit entry, with same-request context",
+    dependencies=[_audit_access],
+)
+async def get_audit_entry(audit_id: str, db: DbSession) -> dict:
+    repo = AuditRepository(db)
+    entry = await repo.get(audit_id)
+    if not entry:
+        raise NotFoundError("Audit entry not found")
+    related = (
+        await repo.by_entity(entry.entity_type, entry.entity_id, exclude_id=entry.id)
+        if entry.entity_id
+        else []
+    )
+    payload = AuditDetailOut(
+        entry=_audit_out(entry),
+        related=[_audit_out(e) for e in related],
+    )
+    return success(payload.model_dump(by_alias=True), "Audit entry")

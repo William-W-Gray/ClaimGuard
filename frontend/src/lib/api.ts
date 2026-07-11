@@ -93,9 +93,20 @@ export interface AuditEntry {
   actorId: string | null;
   actorName: string | null;
   actorEmail: string | null;
+  actorRoles: string[];
+  requestId: string | null;
   ipAddress: string | null;
   changes: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface AuditDetail {
+  entry: AuditEntry;
+  related: AuditEntry[];
+}
+
+export async function fetchAuditEntry(id: string): Promise<AuditDetail> {
+  return api.get<AuditDetail>(`/audit/${encodeURIComponent(id)}`);
 }
 
 export interface PageInfo {
