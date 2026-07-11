@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, ForeignKey, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import GUID, BaseEntity
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 
 class AuditLog(BaseEntity):
@@ -20,3 +24,9 @@ class AuditLog(BaseEntity):
     request_id: Mapped[str | None] = mapped_column(String(64))
     ip_address: Mapped[str | None] = mapped_column(String(64))
     changes: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # Read-only link to the acting user so the trail can show a person's name even
+    # when only actor_id was recorded. Eager (selectin) to keep list reads simple.
+    actor: Mapped[User | None] = relationship(
+        "User", lazy="selectin", viewonly=True
+    )

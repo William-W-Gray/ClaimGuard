@@ -19,6 +19,7 @@ import { DemoControlPage } from '@/routes/DemoControlPage';
 import { ROICalculatorPage } from '@/routes/ROICalculatorPage';
 import { USSDSimulatorPage } from '@/routes/USSDSimulatorPage';
 import { UserManagementPage } from '@/routes/UserManagementPage';
+import { AuditTrailPage } from '@/routes/AuditTrailPage';
 
 // ─── Root Route ───────────────────────────────────────────────────────────────
 
@@ -131,6 +132,14 @@ const usersRoute = createRoute({
   component: UserManagementPage,
 });
 
+// ─── Audit trail (admin/auditor) ──────────────────────────────────────────────────
+
+const auditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/audit',
+  component: AuditTrailPage,
+});
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 const routeTree = rootRoute.addChildren([
@@ -148,6 +157,7 @@ const routeTree = rootRoute.addChildren([
   roiRoute,
   ussdRoute,
   usersRoute,
+  auditRoute,
 ]);
 
 export const router = createRouter({ routeTree });

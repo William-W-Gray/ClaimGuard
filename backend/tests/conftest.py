@@ -33,6 +33,7 @@ async def _prepare_database():
         await seed.seed_providers(session)
         await seed.seed_claims(session)
         await seed.seed_notifications(session)
+        await seed.seed_audit(session)
         await session.commit()
     yield
     async with engine.begin() as conn:
@@ -67,4 +68,11 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
 async def agent_headers(client: AsyncClient) -> dict[str, str]:
     """A seeded non-admin (agent) — for RBAC negative tests."""
     token = await _login(client, "farai.nyathi@claimguard.co.zw")
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def auditor_headers(client: AsyncClient) -> dict[str, str]:
+    """A seeded auditor — audit-trail read access without admin rights."""
+    token = await _login(client, "tapiwa.sithole@claimguard.co.zw")
     return {"Authorization": f"Bearer {token}"}
