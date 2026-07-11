@@ -5,10 +5,11 @@ import { AppShell } from '@/components/layout/AppShell';
 import { EmptyState, ErrorState } from '@/components/shared/EmptyState';
 import { SkeletonTableBody } from '@/components/shared/SkeletonLoader';
 import { Pagination } from '@/components/shared/Pagination';
+import { AuditDetailDrawer } from '@/components/audit/AuditDetailDrawer';
 import { useAuthStore } from '@/stores/authStore';
 import { formatDateTime } from '@/lib/formatters';
 import { cn } from '@/lib/utils';
-import { Search, X, ShieldAlert, ScrollText, RotateCcw } from 'lucide-react';
+import { Search, X, ShieldAlert, RotateCcw } from 'lucide-react';
 
 const PAGE_SIZE = 25;
 
@@ -59,6 +60,7 @@ export function AuditTrailPage() {
   const [action, setAction] = useState('');
   const [entityType, setEntityType] = useState('');
   const [page, setPage] = useState(1);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const { data: filters } = useQuery({
     queryKey: ['audit-filters'],
@@ -184,7 +186,12 @@ export function AuditTrailPage() {
                   {rows.map((e) => {
                     const summary = changeSummary(e.changes);
                     return (
-                      <tr key={e.id} className="!cursor-default align-top">
+                      <tr
+                        key={e.id}
+                        className="align-top cursor-pointer"
+                        onClick={() => setSelectedId(e.id)}
+                        title="View full detail"
+                      >
                         <td><ActorCell entry={e} /></td>
                         <td><span className={cn('badge', actionTone(e.action))}>{e.action}</span></td>
                         <td className="text-gray-600">
@@ -231,6 +238,14 @@ export function AuditTrailPage() {
 
         {isError && <ErrorState onRetry={() => refetch()} />}
       </div>
+
+      {selectedId && (
+        <AuditDetailDrawer
+          id={selectedId}
+          onClose={() => setSelectedId(null)}
+          onSelect={setSelectedId}
+        />
+      )}
     </AppShell>
   );
 }

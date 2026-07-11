@@ -92,3 +92,44 @@ async def test_audit_filters_endpoint(client: AsyncClient, auth_headers: dict):
     data = resp.json()["data"]
     assert "claim.approve" in data["actions"]
     assert "claim" in data["entityTypes"]
+
+
+async def test_audit_entry_includes_actor_roles(client: AsyncClient, auth_headers: dict):
+    resp = await client.get(
+        "/api/v1/audit?action=claim.approve&pageSize=100", headers=auth_headers
+    )
+    row = next(r for r in resp.json()["data"] if r.get("actorName") == "Rudo Chidziva")
+    assert "analyst" in row["actorRoles"]
+
+
+async def test_audit_detail_shows_entity_history(client: AsyncClient, auth_headers: dict):
+    # The seeded reject of CG-00291; its detail should surface the record's history.
+    listed = await client.get(
+        "/api/v1/audit?action=claim.reject&entity_type=claim&pageSize=100",
+        headers=auth_headers,
+    )
+    entry = next(r for r in listed.json()["data"] if r["entityId"] == "CG-00291")
+
+    detail = await client.get(f"/api/v1/audit/{entry['id']}", headers=auth_headers)
+    assert detail.status_code == 200
+    data = detail.json()["data"]
+    assert data["entry"]["id"] == entry["id"]
+    assert data["entry"]["entityId"] == "CG-00291"
+    # Related events are all for the same record, and include the earlier view.
+    assert data["related"], "expected related history for CG-00291"
+    assert all(r["entityId"] == "CG-00291" for r in data["related"])
+    assert any(r["action"] == "claim.view" for r in data["related"])
+
+
+async def test_audit_detail_not_found(client: AsyncClient, auth_headers: dict):
+    resp = await client.get(
+        "/api/v1/audit/00000000-0000-0000-0000-000000000000", headers=auth_headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_audit_detail_forbidden_for_agent(client: AsyncClient, agent_headers: dict):
+    resp = await client.get(
+        "/api/v1/audit/00000000-0000-0000-0000-000000000000", headers=agent_headers
+    )
+    assert resp.status_code == 403

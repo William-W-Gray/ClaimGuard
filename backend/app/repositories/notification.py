@@ -79,6 +79,25 @@ class AuditRepository(BaseRepository[AuditLog]):
         stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def by_entity(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        exclude_id=None,  # noqa: ANN001
+        limit: int = 50,
+    ) -> list[AuditLog]:
+        """The full audit history of one record (same entity_type + entity_id) —
+        the context an investigator needs when drilling into a single event."""
+        stmt = select(AuditLog).where(
+            AuditLog.entity_type == entity_type,
+            AuditLog.entity_id == entity_id,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(AuditLog.id != exclude_id)
+        stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit)
+        return list((await self.session.execute(stmt)).scalars().all())
+
     def _filtered(
         self,
         base,  # noqa: ANN001
